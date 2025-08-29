@@ -1,0 +1,5 @@
+.vscode/
+pyecl_inputs/
+test_xsuite.py 
+logfile.txt 
+LHC_chm_ver.mat
