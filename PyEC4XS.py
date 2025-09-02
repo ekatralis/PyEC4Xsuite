@@ -80,6 +80,13 @@ class XsuiteUniformBinSlicer:
         }
         return slice_dict
         
+extra_allowed_kwargs = {
+    "x_beam_offset",
+    "y_beam_offset",
+    "probes_position",
+    "enable_kick_x",
+    "enable_kick_y",
+}
 
 class xEcloud:
     needs_cpu = True
@@ -88,11 +95,61 @@ class xEcloud:
                  slicer,
                  Dt_ref,
                  pyecl_input_folder="./",
-                 flag_clean_slices=False):
-        pass
-    
+                 flag_clean_slices = False,
+                 space_charge_obj = None,
+                 verbose = False,
+                 save_pyecl_outp_as = None,
+                 **kwargs
+                ):
+        self.slicer = slicer
+        self.Dt_ref = Dt_ref
+        self.L_ecloud = L_ecloud
+        self.verbose = verbose
+        self.flag_clean_slices = flag_clean_slices
+
+        # Initialize E-Cloud
+        self.cloudsim = bsim.BuildupSimulation(
+            pyecl_input_folder=pyecl_input_folder,
+            skip_beam=True,
+            spacech_ele=space_charge_obj,
+            ignore_kwargs=extra_allowed_kwargs,
+            skip_pyeclsaver=(save_pyecl_outp_as is None),
+            filen_main_outp=save_pyecl_outp_as,
+            **self.kwargs
+        )
+        
+        if self.cloudsim.config_dict["track_method"] == "Boris":
+            pass
+        elif self.cloudsim.config_dict["track_method"] == "BorisMultipole":
+            pass
+        else:
+            raise ValueError(
+                """track_method should be 'Boris' or 'BorisMultipole' - others are not implemented in the PyEC4XS module"""
+            )
+        
+        self.x_beam_offset = 0.0
+        self.y_beam_offset = 0.0
+        if "x_beam_offset" in kwargs:
+            self.x_beam_offset = kwargs["x_beam_offset"]
+        if "y_beam_offset" in kwargs:
+            self.y_beam_offset = kwargs["y_beam_offset"]
+
+        self.enable_kick_x = True
+        self.enable_kick_y = True
+        if "enable_kick_x" in kwargs:
+            self.enable_kick_x = kwargs["enable_kick_x"]
+        if not self.enable_kick_x:
+            print("Horizontal kick on the beam is disabled!")
+        if "enable_kick_y" in kwargs:
+            self.enable_kick_y = kwargs["enable_kick_y"]
+        if not self.enable_kick_y:
+            print("Vertical kick on the beam is disabled!")
+        self.i_reinit = 0
+        self.t_sim = 0.0
+        self.i_curr_bunch = -1
+
     def track(self, particles):
-        particles.x += 10
+        # particles.x += 10
         pass
 
 
