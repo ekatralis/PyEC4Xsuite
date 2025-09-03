@@ -6,14 +6,24 @@ from PyECLOUD import buildup_simulation as bsim
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.constants import c
-from . import myfilemanager as mfm
+# from . import myfilemanager as mfm
+import myfilemanager as mfm # Change for testing
 
 class XsuiteUniformBinSlicer:
 
-    def __init__(self, n_slices: int, mode: Literal["percentile", "minmax"] = "minmax",
-                 percentile: float = 0.001, particles: xt.Particles = None):
+    def __init__(self, n_slices: int = 10, mode: Literal["percentile", "minmax"] = "minmax",
+                 percentile: float = 0.001, particles: xt.Particles = None,
+                 iter_mode: Literal["LeftToRight", "RightToLeft"] = "RightToLeft"):
         self.n_slices = n_slices
         self.n_bins = self.n_slices + 1
+        slice_list = list(range(n_slices))
+        if iter_mode == "LeftToRight":
+            pass
+        elif iter_mode == "RightToLeft":
+            slice_list.reverse()
+        else:
+            raise ValueError("Invalid iter_mode")
+        self.slice_list = slice_list
         self.mode = mode
         self.percentile = percentile
         self.z_min = None
@@ -73,13 +83,32 @@ class XsuiteUniformBinSlicer:
         beta = np.mean(particles.beta0[idx_particle_slice])
         gamma = 1/(np.sqrt(1-beta**2))
         dt = self.dz / (beta * c)
+        z_mean = np.mean(particles.zeta[idx_particle_slice])
         slice_dict = {
             "particle_idx" : idx_particle_slice,
             "beta"         : beta,
+            "zeta"         : z_mean,
             "gamma"        : gamma,
-            "dt"           : dt
+            "dt"           : dt, 
+            "slice_info"   : f"{slice_num+1}/{self.n_slices}"
         }
         return slice_dict
+    
+    def __getitem__(self,key):
+        if key < 0 or key>self.n_slices-1:
+            raise Exception(f"Slice {key} is out of bounds for number of slices: {self.n_slices}. Slices are 0 indexed")
+        return self.get_slice(slice_num = self.slice_list[key])
+    
+    def __next__(self):
+        self.idx += 1
+        if self.idx < self.n_slices:
+            return self.__getitem__(self.idx)
+        else:
+            raise StopIteration
+
+    def __iter__(self):
+        self.idx = -1
+        return self
         
 extra_allowed_kwargs = {
     "x_beam_offset",
@@ -94,6 +123,7 @@ class xEcloud:
     def __init__(self,
                  L_ecloud,
                  slicer,
+                 slicerKwargs,
                  Dt_ref,
                  pyecl_input_folder="./",
                  flag_clean_slices = False,
@@ -104,6 +134,7 @@ class xEcloud:
                  **kwargs
                 ):
         self.slicer = slicer
+        self.slicerKwargs = slicerKwargs
         self.Dt_ref = Dt_ref
         self.L_ecloud = L_ecloud
         self.verbose = verbose
@@ -168,6 +199,9 @@ class xEcloud:
     def track(self, particles: xt.Particles):
         self._reinitialize()
         # particles.x += 10
+        slices = self.slicer(**self.slicerKwargs,particles = particles)
+        for slice in slices:
+            self._track_single_slice(particles=particles,slice=slice)
         self._finalize()
         pass
 
@@ -362,4 +396,3 @@ class xEcloud:
             self.Ey_ele_last_track_at_probes = np.array(
                 self.Ey_ele_last_track_at_probes[::-1]
             )
-
