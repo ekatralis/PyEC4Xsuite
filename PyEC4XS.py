@@ -6,6 +6,7 @@ from PyECLOUD import buildup_simulation as bsim
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.constants import c
+from . import myfilemanager as mfm
 
 class XsuiteUniformBinSlicer:
 
@@ -99,6 +100,7 @@ class xEcloud:
                  space_charge_obj = None,
                  verbose = False,
                  save_pyecl_outp_as = None,
+                 enable_diagnostics = False,
                  **kwargs
                 ):
         self.slicer = slicer
@@ -106,6 +108,8 @@ class xEcloud:
         self.L_ecloud = L_ecloud
         self.verbose = verbose
         self.flag_clean_slices = flag_clean_slices
+        self.kwargs = kwargs
+        self.enable_diagnostics = enable_diagnostics
 
         # Initialize E-Cloud
         self.cloudsim = bsim.BuildupSimulation(
@@ -144,12 +148,218 @@ class xEcloud:
             self.enable_kick_y = kwargs["enable_kick_y"]
         if not self.enable_kick_y:
             print("Vertical kick on the beam is disabled!")
+        
+        self.initial_MP_e_clouds = [
+            cl.MP_e.extract_dict() for cl in self.cloudsim.cloud_list
+        ]
+
+        self.beam_PyPIC_state = self.cloudsim.spacech_ele.PyPICobj.get_state_object()
+        
+        if self.enable_diagnostics:
+            self._diagnostics_init()
+
+        self.track_only_first_time = False
+
+        self.N_tracks = 0
         self.i_reinit = 0
         self.t_sim = 0.0
         self.i_curr_bunch = -1
 
-    def track(self, particles):
+    def track(self, particles: xt.Particles):
+        self._reinitialize()
         # particles.x += 10
+        self._finalize()
         pass
 
+    def _reinitialize(self):
+        cc = mfm.obj_from_dict(self.cloudsim.config_dict)
+
+        for thiscloud, initdict in zip(
+            self.cloudsim.cloud_list, self.initial_MP_e_clouds
+        ):
+            thiscloud.MP_e.init_from_dict(initdict)
+            thiscloud.MP_e.set_nel_mp_ref(thiscloud.MP_e.nel_mp_ref_0)
+            thisconf = thiscloud.config_dict
+
+            if thiscloud.pyeclsaver is not None:
+                thiscloud.pyeclsaver.extract_sey = False
+                thiscloud.pyeclsaver.start_observing(
+                    cc.Dt,
+                    thiscloud.MP_e,
+                    None,
+                    thiscloud.impact_man,
+                    thisconf.r_center,
+                    thisconf.Dt_En_hist,
+                    thisconf.logfile_path,
+                    thisconf.progress_path,
+                    flag_detailed_MP_info=thisconf.flag_detailed_MP_info,
+                    flag_movie=thisconf.flag_movie,
+                    flag_sc_movie=thisconf.flag_sc_movie,
+                    save_mp_state_time_file=thisconf.save_mp_state_time_file,
+                    flag_presence_sec_beams=self.cloudsim.flag_presence_sec_beams,
+                    sec_beams_list=self.cloudsim.sec_beams_list,
+                    dec_fac_secbeam_prof=thisconf.dec_fac_secbeam_prof,
+                    el_density_probes=thisconf.el_density_probes,
+                    save_simulation_state_time_file=thisconf.save_simulation_state_time_file,
+                    x_min_hist_det=thisconf.x_min_hist_det,
+                    x_max_hist_det=thisconf.x_max_hist_det,
+                    y_min_hist_det=thisconf.y_min_hist_det,
+                    y_max_hist_det=thisconf.y_max_hist_det,
+                    Dx_hist_det=thisconf.Dx_hist_det,
+                    dec_fact_out=cc.dec_fact_out,
+                    stopfile=cc.stopfile,
+                    filen_main_outp=thisconf.filen_main_outp,
+                    flag_cos_angle_hist=thisconf.flag_cos_angle_hist,
+                    cos_angle_width=thisconf.cos_angle_width,
+                    flag_multiple_clouds=(len(self.cloudsim.cloud_list) > 1),
+                    cloud_name=thisconf.cloud_name,
+                    flag_last_cloud=(thiscloud is self.cloudsim.cloud_list[-1]),
+                )
+                thiscloud.pyeclsaver.filen_main_outp = (
+                        thiscloud.pyeclsaver.filen_main_outp.split(".mat")[0].split(
+                            "__iter"
+                        )[0]
+                        + "__iter%d.mat" % self.i_reinit
+                    )
+        if self.enable_diagnostics:
+            self._diagnostics_reinit()
+        self.i_curr_bunch = -1
+        self.i_reinit += 1
+    
+    def _finalize(self):
+        if self.enable_diagnostics:
+            self._diagnostics_finalize()
+    
+    def _track_single_slice(self, particles: xt.Particles, slice: dict):
+        return
+
+    def _diagnostics_init(self):
+        self.save_ele_field_probes = False
+        self.x_probes = -1
+        self.y_probes = -1
+        self.Ex_ele_last_track_at_probes = -1
+        self.Ey_ele_last_track_at_probes = -1
+        if "probes_position" in list(self.kwargs.keys()):
+            self.save_ele_field_probes = True
+            self.probes_position = self.kwargs["probes_position"]
+            self.N_probes = len(self.probes_position)
+            self.x_probes = []
+            self.y_probes = []
+            for ii_probe in range(self.N_probes):
+                self.x_probes.append(self.probes_position[ii_probe]["x"])
+                self.y_probes.append(self.probes_position[ii_probe]["y"])
+
+            self.x_probes = np.array(self.x_probes)
+            self.y_probes = np.array(self.y_probes)
+        self.save_ele_distributions_last_track = False
+        self.save_ele_potential_and_field = False
+        self.save_ele_potential = False
+        self.save_ele_field = False
+        self.save_ele_MP_position = False
+        self.save_ele_MP_velocity = False
+        self.save_ele_MP_size = False
+
+        self.save_beam_distributions_last_track = False
+        self.save_beam_potential_and_field = False
+        self.save_beam_potential = False
+        self.save_beam_field = False
+    
+    def _diagnostics_reinit(self):
+        
+        if self.save_ele_distributions_last_track:
+            self.rho_ele_last_track = []
+
+        if self.save_ele_potential_and_field:
+            self.save_ele_potential = True
+            self.save_ele_field = True
+
+        if self.save_ele_potential:
+            self.phi_ele_last_track = []
+
+        if self.save_ele_field:
+            self.Ex_ele_last_track = []
+            self.Ey_ele_last_track = []
+
+        if self.save_beam_distributions_last_track:
+            self.rho_beam_last_track = []
+
+        if self.save_beam_potential_and_field:
+            self.save_beam_potential = True
+            self.save_beam_field = True
+
+        if self.save_beam_potential:
+            self.phi_beam_last_track = []
+
+        if self.save_beam_field:
+            self.Ex_beam_last_track = []
+            self.Ey_beam_last_track = []
+
+        if self.save_ele_MP_position:
+            self.x_MP_last_track = []
+            self.y_MP_last_track = []
+
+        if self.save_ele_MP_velocity:
+            self.vx_MP_last_track = []
+            self.vy_MP_last_track = []
+
+        if self.save_ele_MP_size:
+            self.nel_MP_last_track = []
+
+        if (
+            self.save_ele_MP_position
+            or self.save_ele_MP_velocity
+            or self.save_ele_MP_size
+        ):
+            self.N_MP_last_track = []
+
+        if self.save_ele_field_probes:
+            self.Ex_ele_last_track_at_probes = []
+            self.Ey_ele_last_track_at_probes = []
+    
+    def _diagnostics_finalize(self):
+        if self.save_ele_distributions_last_track:
+            self.rho_ele_last_track = np.array(self.rho_ele_last_track[::-1])
+
+        if self.save_ele_potential:
+            self.phi_ele_last_track = np.array(self.phi_ele_last_track[::-1])
+
+        if self.save_ele_field:
+            self.Ex_ele_last_track = np.array(self.Ex_ele_last_track[::-1])
+            self.Ey_ele_last_track = np.array(self.Ey_ele_last_track[::-1])
+
+        if self.save_beam_distributions_last_track:
+            self.rho_beam_last_track = np.array(self.rho_beam_last_track[::-1])
+
+        if self.save_beam_potential:
+            self.phi_beam_last_track = np.array(self.phi_beam_last_track[::-1])
+
+        if self.save_beam_field:
+            self.Ex_beam_last_track = np.array(self.Ex_beam_last_track[::-1])
+            self.Ey_beam_last_track = np.array(self.Ey_beam_last_track[::-1])
+
+        if self.save_ele_MP_position:
+            self.x_MP_last_track = np.array(self.x_MP_last_track[::-1])
+            self.y_MP_last_track = np.array(self.y_MP_last_track[::-1])
+
+        if self.save_ele_MP_velocity:
+            self.vx_MP_last_track = np.array(self.vx_MP_last_track[::-1])
+            self.vy_MP_last_track = np.array(self.vy_MP_last_track[::-1])
+
+        if self.save_ele_MP_size:
+            self.nel_MP_last_track = np.array(self.nel_MP_last_track[::-1])
+
+        if (
+            self.save_ele_MP_position
+            or self.save_ele_MP_velocity
+            or self.save_ele_MP_size
+        ):
+            self.N_MP_last_track = np.array(self.N_MP_last_track[::-1])
+
+        if self.save_ele_field_probes:
+            self.Ex_ele_last_track_at_probes = np.array(
+                self.Ex_ele_last_track_at_probes[::-1]
+            )
+            self.Ey_ele_last_track_at_probes = np.array(
+                self.Ey_ele_last_track_at_probes[::-1]
+            )
 
