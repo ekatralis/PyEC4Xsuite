@@ -11,8 +11,8 @@ import myfilemanager as mfm # Change for testing
 
 class XsuiteUniformBinSlicer:
 
-    def __init__(self, n_slices: int = 10, mode: Literal["percentile", "minmax"] = "minmax",
-                 percentile: float = 0.001, particles: xt.Particles = None,
+    def __init__(self, particles: xt.Particles, n_slices: int = 10, 
+                 mode: Literal["percentile", "minmax"] = "minmax", percentile: float = 0.001,
                  iter_mode: Literal["LeftToRight", "RightToLeft"] = "RightToLeft"):
         self.n_slices = n_slices
         self.n_bins = self.n_slices + 1
@@ -29,61 +29,45 @@ class XsuiteUniformBinSlicer:
         self.z_min = None
         self.z_max = None
         self.bins = None
-        if particles is not None:
-            self.set_bins(particles)
-            self.particles = particles
-        else:
-            self.particles = None
+        self.particles = particles
+        self._set_bins()
 
-    def _get_beam_edges(self, particles: xt.Particles):
+    def _get_beam_edges(self):
         if self.mode == "percentile":
-            self.z_min = np.percentile(particles.zeta, self.percentile)
-            self.z_max = np.percentile(particles.zeta, 100-self.percentile)
+            self.z_min = np.percentile(self.particles.zeta, self.percentile)
+            self.z_max = np.percentile(self.particles.zeta, 100-self.percentile)
         elif self.mode == "minmax":
-            self.z_min = np.min(particles.zeta)
-            self.z_max = np.max(particles.zeta)
+            self.z_min = np.min(self.particles.zeta)
+            self.z_max = np.max(self.particles.zeta)
         else:
             raise Exception(f"{self.mode} mode not supported")
-        
-    def _validate_input(self,particles) -> xt.Particles:
-        if particles is None:
-            particles = self.particles
-        if particles is None:
-            raise Exception(f"Please provide particles to be binned")
-        if self.bins is None:
-            raise Exception(f"Please use the set_bins function or reinitialize with particles")
-        return particles
 
-    def set_bins(self, particles: xt.Particles) -> np.ndarray:
-        self._get_beam_edges(particles)
+    def _set_bins(self) -> np.ndarray:
+        self._get_beam_edges()
         self.bins = np.linspace(self.z_min,self.z_max,self.n_bins)
         self.dz = self.bins[1] - self.bins[0]
         return self.bins
 
-    def particles_in_slice(self, slice_num: int, particles: xt.Particles = None) -> np.ndarray:
-        if self.bins is None:
-            self.set_bins(particles)
+    def _particles_in_slice(self, slice_num: int) -> np.ndarray:
         cond = None
-        particles = self._validate_input(particles)
         if slice_num > self.n_slices-1:
             raise Exception(f"Slice {slice_num} is out of bounds for number of slices: {self.n_slices}. Slices are 0 indexed")
-        inside = (self.bins[slice_num] < particles.zeta) & (particles.zeta <= self.bins[slice_num+1])
+        inside = (self.bins[slice_num] < self.particles.zeta) & (self.particles.zeta <= self.bins[slice_num+1])
         if slice_num == 0:
-            cond = inside | (particles.zeta <= self.bins[slice_num]) 
+            cond = inside | (self.particles.zeta <= self.bins[slice_num]) 
         elif slice_num == self.n_slices:
-            cond = inside | (particles.zeta > self.bins[slice_num+1])
+            cond = inside | (self.particles.zeta > self.bins[slice_num+1])
         else:
             cond = inside
-        particles_idx = particles.particle_id[np.where(cond)[0]]
+        particles_idx = self.particles.particle_id[np.where(cond)[0]]
         return particles_idx
 
-    def get_slice(self, slice_num: int, particles: xt.Particles = None) -> dict:
-        particles = self._validate_input(particles)
-        idx_particle_slice = self.particles_in_slice(slice_num, particles = particles)
-        beta = np.mean(particles.beta0[idx_particle_slice])
+    def _get_slice(self, slice_num: int) -> dict:
+        idx_particle_slice = self._particles_in_slice(slice_num)
+        beta = np.mean(self.particles.beta0[idx_particle_slice])
         gamma = 1/(np.sqrt(1-beta**2))
         dt = self.dz / (beta * c)
-        z_mean = np.mean(particles.zeta[idx_particle_slice])
+        z_mean = np.mean(self.particles.zeta[idx_particle_slice])
         slice_dict = {
             "particle_idx" : idx_particle_slice,
             "beta"         : beta,
@@ -97,7 +81,7 @@ class XsuiteUniformBinSlicer:
     def __getitem__(self,key):
         if key < 0 or key>self.n_slices-1:
             raise Exception(f"Slice {key} is out of bounds for number of slices: {self.n_slices}. Slices are 0 indexed")
-        return self.get_slice(slice_num = self.slice_list[key])
+        return self._get_slice(slice_num = self.slice_list[key])
     
     def __next__(self):
         self.idx += 1
