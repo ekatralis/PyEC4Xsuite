@@ -6,6 +6,7 @@ from PyECLOUD import buildup_simulation as bsim
 import numpy as np
 import matplotlib.pyplot as plt
 from scipy.constants import c
+import time
 # from . import myfilemanager as mfm
 import myfilemanager as mfm # Change for testing
 
@@ -13,7 +14,7 @@ class XsuiteUniformBinSlicer:
 
     def __init__(self, particles: xt.Particles, n_slices: int = 10, 
                  mode: Literal["percentile", "minmax"] = "minmax", percentile: float = 0.001,
-                 iter_mode: Literal["LeftToRight", "RightToLeft"] = "RightToLeft"):
+                 iter_mode: Literal["LeftToRight", "RightToLeft"] = "LeftToRight"):
         self.n_slices = n_slices
         self.n_bins = self.n_slices + 1
         slice_list = list(range(n_slices))
@@ -73,6 +74,7 @@ class XsuiteUniformBinSlicer:
             "beta"         : beta,
             "zeta"         : z_mean,
             "gamma"        : gamma,
+            "dz"           : self.dz,
             "dt"           : dt, 
             "slice_info"   : f"{slice_num+1}/{self.n_slices}"
         }
@@ -101,6 +103,31 @@ extra_allowed_kwargs = {
     "enable_kick_x",
     "enable_kick_y",
 }
+
+class DummyBeamTim(object):
+    """Dummy beam-timing class to interface with buildup simulation"""
+
+    def __init__(self, PyPIC_state):
+        self.PyPIC_state = PyPIC_state
+
+        self.b_spac = 0.0
+        self.pass_numb = 0
+        self.N_pass_tot = 1
+
+    def get_beam_eletric_field(self, MP_e):
+        if MP_e.N_mp > 0:
+            if self.PyPIC_state is None:
+                Ex_n_beam = 0.0 * MP_e.x_mp[0 : MP_e.N_mp]
+                Ey_n_beam = 0.0 * MP_e.y_mp[0 : MP_e.N_mp]
+            else:
+                # compute beam electric field
+                Ex_n_beam, Ey_n_beam = self.PyPIC_state.gather(
+                    MP_e.x_mp[0 : MP_e.N_mp], MP_e.y_mp[0 : MP_e.N_mp]
+                )
+        else:
+            Ex_n_beam = 0.0
+            Ey_n_beam = 0.0
+        return Ex_n_beam, Ey_n_beam
 
 class xEcloud:
     needs_cpu = True
@@ -181,13 +208,32 @@ class xEcloud:
         self.i_curr_bunch = -1
 
     def track(self, particles: xt.Particles):
+        if self.track_only_first_time:
+            if self.N_tracks > 0:
+                print("Warning: Track skipped because track_only_first_time is True.")
+                return
+
+        if self.verbose:
+            start_time = time.mktime(time.localtime())
+
         self._reinitialize()
-        # particles.x += 10
-        slices = self.slicer(**self.slicerKwargs,particles = particles)
+        slices = self.slicer(particles,**self.slicerKwargs)
+        force_newpass = True
         for slice in slices:
-            self._track_single_slice(particles=particles,slice=slice)
+            self._track_single_slice(particles=particles,slice=slice,force_pyecl_newpass=force_newpass)
+            if force_newpass:
+                force_newpass = False
+
         self._finalize()
-        pass
+
+        if self.verbose:
+            stop_time = time.mktime(time.localtime())
+            print("Done track %d in %.1f s" % (self.N_tracks, stop_time - start_time))
+
+        self.N_tracks += 1
+
+    def _track_single_slice(self, particles: xt.Particles, slice: dict):
+        return
 
     def _reinitialize(self):
         cc = mfm.obj_from_dict(self.cloudsim.config_dict)
@@ -247,9 +293,6 @@ class xEcloud:
     def _finalize(self):
         if self.enable_diagnostics:
             self._diagnostics_finalize()
-    
-    def _track_single_slice(self, particles: xt.Particles, slice: dict):
-        return
 
     def _diagnostics_init(self):
         self.save_ele_field_probes = False
