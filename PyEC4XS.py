@@ -151,6 +151,8 @@ class xEcloud:
                  verbose = False,
                  save_pyecl_outp_as = None,
                  enable_diagnostics = False,
+                 kick_mode_for_beam_field=False,
+                 force_interp_at_substeps_interacting_slices=False,
                  **kwargs
                 ):
         self.slicer = slicer
@@ -210,6 +212,8 @@ class xEcloud:
             self._diagnostics_init()
 
         self.track_only_first_time = False
+        self.kick_mode_for_beam_field = kick_mode_for_beam_field
+        self.force_interp_at_substeps_interacting_slices = force_interp_at_substeps_interacting_slices
 
         self.N_tracks = 0
         self.i_reinit = 0
@@ -227,8 +231,6 @@ class xEcloud:
         # These updates should follow shortly after these changes are confirmed
         if np.mean(particles.q0) != particles.q0[0]:
             raise AssertionError("Module asssumes that all particles have the same charge")
-        if np.mean(particles.weight) != 1:
-            raise AssertionError("Module assumes same MP size for each particle")
 
         if self.verbose:
             start_time = time.mktime(time.localtime())
@@ -261,6 +263,9 @@ class xEcloud:
             interact_with_EC = True
         
         dt_slice = slice["dt"]
+        ix = slice["particle_idx"]
+        dz = slice["dz"]
+        charge = np.mean(particles.q0)
 
         # Check if sub-slicing is needed
         if self.cloudsim.config_dict["Dt"] is not None:
@@ -305,8 +310,101 @@ class xEcloud:
             new_pass = force_pyecl_newpass
             self.i_curr_bunch = 0
 
+        # Cloud simulation
         for i_clou_step, dt in enumerate(dt_array):
+            # define substep
+            if dt > self.Dt_ref:
+                N_sub_steps = int(np.round(dt / self.Dt_ref))
+            else:
+                N_sub_steps = 1
+
+            Dt_substep = dt / N_sub_steps
+            # print Dt_substep, N_sub_steps, dt
+
+            if len(ix) == 0 or not interact_with_EC:  # no particles in the beam
+
+                # build dummy beamtim object
+                dummybeamtim = DummyBeamTim(None)
+
+                dummybeamtim.lam_t_curr = 0.0
+                dummybeamtim.sigmax = 0.0
+                dummybeamtim.sigmay = 0.0
+                dummybeamtim.x_beam_pos = 0.0
+                dummybeamtim.y_beam_pos = 0.0
+            else:
+                # beam field
+                self.beam_PyPIC_state.scatter(
+                    x_mp=particles.x[ix] + self.x_beam_offset,
+                    y_mp=particles.y[ix] + self.y_beam_offset,
+                    nel_mp=particles.weight[ix] / dz,
+                    charge=charge,
+                )
+                self.cloudsim.spacech_ele.PyPICobj.solve_states([self.beam_PyPIC_state])
+
+                # build dummy beamtim object
+                dummybeamtim = DummyBeamTim(self.beam_PyPIC_state)
+
+                dummybeamtim.lam_t_curr = np.mean(
+                    particles.weight / dz
+                ) * len(ix)
+                dummybeamtim.sigmax = np.std(particles.x[ix])
+                dummybeamtim.sigmay = np.std(particles.y[ix])
+                dummybeamtim.x_beam_pos = np.mean(particles.x[ix]) + self.x_beam_offset
+                dummybeamtim.y_beam_pos = np.mean(particles.y[ix]) + self.y_beam_offset
+
+            dummybeamtim.tt_curr = self.t_sim  # In order to have the PIC activated
+            dummybeamtim.Dt_curr = dt
+            dummybeamtim.pass_numb = self.i_curr_bunch
+            dummybeamtim.flag_new_bunch_pass = new_pass
+
+            # Force space charge recomputation
+            force_recompute_space_charge = interact_with_EC or (
+                i_clou_step == 0
+            )  # we always force at the first step, as we don't know the state of the PIC
+
+            # Disable cleanings and regenerations
+            skip_MP_cleaning = interact_with_EC
+            skip_MP_regen = interact_with_EC
+
+            # print(dummybeamtim.tt_curr, dummybeamtim.flag_new_bunch_pass, force_recompute_space_charge)
+
+            # Perform cloud simulation step
+            self.cloudsim.sim_time_step(
+                beamtim_obj=dummybeamtim,
+                Dt_substep_custom=Dt_substep,
+                N_sub_steps_custom=N_sub_steps,
+                kick_mode_for_beam_field=self.kick_mode_for_beam_field,
+                force_recompute_space_charge=force_recompute_space_charge,
+                skip_MP_cleaning=skip_MP_cleaning,
+                skip_MP_regen=skip_MP_regen,
+                force_reinterp_fields_at_substeps=(interact_with_EC
+                    and self.force_interp_at_substeps_interacting_slices)
+            )
+
+            if interact_with_EC:
+                # Build MP_system-like object with beam coordinates
+                MP_p = Empty()
+                MP_p.x_mp = particles.x[ix] + self.x_beam_offset
+                MP_p.y_mp = particles.y[ix] + self.y_beam_offset
+                MP_p.N_mp = len(particles.x[ix])
+
+                ## compute cloud field on beam particles
+                Ex_sc_p, Ey_sc_p = spacech_ele.get_sc_eletric_field(MP_p)
+
+                ## kick beam particles
+                fact_kick = (
+                    charge
+                    / (particles.mass * particles.beta0 * particles.beta0 * particles.gamma0 * c * c)
+                    * self.L_ecloud
+                )
+                if self.enable_kick_x:
+                    particles.px[ix] += (1 + particles.delta) * fact_kick * Ex_sc_p
+                if self.enable_kick_y:
+                    particles.py[ix] += (1 + particles.delta) * fact_kick * Ey_sc_p
+                    
             self._diagnostics_save(spacech_ele)
+            self.t_sim += dt
+            new_pass = False  # it can be true only for the first sub-slice of a slice
 
     def _reinitialize(self):
         cc = mfm.obj_from_dict(self.cloudsim.config_dict)
