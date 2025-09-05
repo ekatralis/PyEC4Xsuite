@@ -221,6 +221,14 @@ class xEcloud:
             if self.N_tracks > 0:
                 print("Warning: Track skipped because track_only_first_time is True.")
                 return
+            
+        # Initial assumptions to get module up and running.
+        # These assumptions will change, but require updates to PyECLOUD.
+        # These updates should follow shortly after these changes are confirmed
+        if np.mean(particles.q0) != particles.q0[0]:
+            raise AssertionError("Module asssumes that all particles have the same charge")
+        if np.mean(particles.weight) != 1:
+            raise AssertionError("Module assumes same MP size for each particle")
 
         if self.verbose:
             start_time = time.mktime(time.localtime())
