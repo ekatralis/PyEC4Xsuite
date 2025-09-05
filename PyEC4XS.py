@@ -9,6 +9,7 @@ from scipy.constants import c
 import time
 # from . import myfilemanager as mfm
 import myfilemanager as mfm # Change for testing
+from scipy.constants import e as qe
 
 class XsuiteUniformBinSlicer:
 
@@ -82,7 +83,7 @@ class XsuiteUniformBinSlicer:
             "gamma"        : gamma,
             "dz"           : self.dz,
             "dt"           : dt, 
-            "slice_info"   : f"{slice_num+1}/{self.n_slices}"
+            "slice_num"   : f"{slice_num+1}/{self.n_slices}"
         }
         return slice_dict
     
@@ -229,7 +230,7 @@ class xEcloud:
         # Initial assumptions to get module up and running.
         # These assumptions will change, but require updates to PyECLOUD.
         # These updates should follow shortly after these changes are confirmed
-        if np.mean(particles.q0) != particles.q0[0]:
+        if np.mean(particles.charge) != particles.q0:
             raise AssertionError("Module asssumes that all particles have the same charge")
 
         if self.verbose:
@@ -265,7 +266,7 @@ class xEcloud:
         dt_slice = slice["dt"]
         ix = slice["particle_idx"]
         dz = slice["dz"]
-        charge = np.mean(particles.q0)
+        charge = particles.q0 * qe
 
         # Check if sub-slicing is needed
         if self.cloudsim.config_dict["Dt"] is not None:
@@ -394,15 +395,15 @@ class xEcloud:
                 ## kick beam particles
                 fact_kick = (
                     charge
-                    / (particles.mass * particles.beta0 * particles.beta0 * particles.gamma0 * c * c)
+                    / (particles.mass[ix] * particles.beta0[ix] * particles.beta0[ix] * particles.gamma0[ix] * c * c)
                     * self.L_ecloud
                 )
                 if self.enable_kick_x:
-                    particles.px[ix] += (1 + particles.delta) * fact_kick * Ex_sc_p
+                    particles.px[ix] += (1 + particles.delta[ix]) * fact_kick * Ex_sc_p
                 if self.enable_kick_y:
-                    particles.py[ix] += (1 + particles.delta) * fact_kick * Ey_sc_p
-                    
-            self._diagnostics_save(spacech_ele)
+                    particles.py[ix] += (1 + particles.delta[ix]) * fact_kick * Ey_sc_p
+            if self.enable_diagnostics:        
+                self._diagnostics_save(spacech_ele)
             self.t_sim += dt
             new_pass = False  # it can be true only for the first sub-slice of a slice
 
@@ -464,6 +465,11 @@ class xEcloud:
     def _finalize(self):
         if self.enable_diagnostics:
             self._diagnostics_finalize()
+    
+    def finalize_and_reinitialize(self):
+        print("Exec. finalize and reinitialize")
+        self._finalize()
+        self._reinitialize()
 
     def _diagnostics_init(self):
         self.save_ele_field_probes = False
