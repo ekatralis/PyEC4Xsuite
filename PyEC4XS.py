@@ -129,6 +129,9 @@ class DummyBeamTim(object):
             Ey_n_beam = 0.0
         return Ex_n_beam, Ey_n_beam
 
+class Empty():
+    pass
+
 class xEcloud:
     needs_cpu = True
     def __init__(self,
@@ -232,8 +235,64 @@ class xEcloud:
 
         self.N_tracks += 1
 
-    def _track_single_slice(self, particles: xt.Particles, slice: dict):
-        return
+    def _track_single_slice(self, particles: xt.Particles, slice: dict, force_pyecl_newpass: bool = False):
+        spacech_ele = self.cloudsim.spacech_ele
+        # Check if the slice interacts with the beam
+        if "slice_info" in list(slice.keys()):
+            if "interact_with_EC" in list(slice["slice_info"].keys()):
+                interact_with_EC = slice["slice_info"]["interact_with_EC"]
+            else:
+                interact_with_EC = True
+        else:
+            interact_with_EC = True
+        
+        dt_slice = slice["dt"]
+
+        # Check if sub-slicing is needed
+        if self.cloudsim.config_dict["Dt"] is not None:
+            if dt_slice > self.cloudsim.config_dict["Dt"]:
+                if interact_with_EC:
+                    raise ValueError(
+                        "Slices that interact with the cloud cannot be longer than the buildup timestep!"
+                    )
+
+                N_cloud_steps = np.int_(
+                    np.ceil(dt_slice / self.cloudsim.config_dict["Dt"])
+                )
+                dt_cloud_step = dt_slice / N_cloud_steps
+                dt_array = np.array(N_cloud_steps * [dt_cloud_step])
+            else:
+                dt_array = np.array([dt_slice])
+        else:
+            dt_array = np.array([dt_slice])
+        
+        # Acquire bunch passage information
+        if "slice_info" in list(slice.keys()):
+            if "info_parent_bunch" in list(slice["slice_info"].keys()):
+
+                # check if first slice of first bunch
+                if (
+                    slice["slice_info"]["info_parent_bunch"]["i_bunch"] == 0
+                    and slice["slice_info"]["i_slice"] == 0
+                ):
+                    self.finalize_and_reinitialize()
+
+                # check if new passage
+                if slice["slice_info"]["info_parent_bunch"]["i_bunch"] > self.i_curr_bunch:
+                    self.i_curr_bunch = slice["slice_info"]["info_parent_bunch"]["i_bunch"]
+                    new_pass = True
+                else:
+                    new_pass = force_pyecl_newpass
+
+            else:
+                new_pass = force_pyecl_newpass
+                self.i_curr_bunch = 0
+        else:
+            new_pass = force_pyecl_newpass
+            self.i_curr_bunch = 0
+
+        for i_clou_step, dt in enumerate(dt_array):
+            self._diagnostics_save(spacech_ele)
 
     def _reinitialize(self):
         cc = mfm.obj_from_dict(self.cloudsim.config_dict)
@@ -423,3 +482,55 @@ class xEcloud:
             self.Ey_ele_last_track_at_probes = np.array(
                 self.Ey_ele_last_track_at_probes[::-1]
             )
+    
+    def _diagnostics_save(self,spacech_ele):
+        MPe_for_save = self.cloudsim.cloud_list[0].MP_e
+
+        if self.save_ele_distributions_last_track:
+            self.rho_ele_last_track.append(spacech_ele.rho.copy())
+
+        if self.save_ele_potential:
+            self.phi_ele_last_track.append(spacech_ele.phi.copy())
+
+        if self.save_ele_field:
+            self.Ex_ele_last_track.append(spacech_ele.efx.copy())
+            self.Ey_ele_last_track.append(spacech_ele.efy.copy())
+
+        if self.save_beam_distributions_last_track:
+            self.rho_beam_last_track.append(self.beam_PyPIC_state.rho.copy())
+
+        if self.save_beam_potential:
+            self.phi_beam_last_track.append(self.beam_PyPIC_state.phi.copy())
+
+        if self.save_beam_field:
+            self.Ex_beam_last_track.append(self.beam_PyPIC_state.efx.copy())
+            self.Ey_beam_last_track.append(self.beam_PyPIC_state.efy.copy())
+
+        if self.save_ele_MP_position:
+            self.x_MP_last_track.append(MPe_for_save.x_mp.copy())
+            self.y_MP_last_track.append(MPe_for_save.y_mp.copy())
+
+        if self.save_ele_MP_velocity:
+            self.vx_MP_last_track.append(MPe_for_save.vx_mp.copy())
+            self.vy_MP_last_track.append(MPe_for_save.vy_mp.copy())
+
+        if self.save_ele_MP_size:
+            self.nel_MP_last_track.append(MPe_for_save.nel_mp.copy())
+
+        if (
+            self.save_ele_MP_position
+            or self.save_ele_MP_velocity
+            or self.save_ele_MP_size
+        ):
+            self.N_MP_last_track.append(MPe_for_save.N_mp)
+
+        if self.save_ele_field_probes:
+            MP_probes = Empty()
+            MP_probes.x_mp = self.x_probes
+            MP_probes.y_mp = self.y_probes
+            MP_probes.nel_mp = self.x_probes * 0.0 + 1.0  # fictitious charge of 1 C
+            MP_probes.N_mp = len(self.x_probes)
+            Ex_sc_probe, Ey_sc_probe = spacech_ele.get_sc_eletric_field(MP_probes)
+
+            self.Ex_ele_last_track_at_probes.append(Ex_sc_probe.copy())
+            self.Ey_ele_last_track_at_probes.append(Ey_sc_probe.copy())
