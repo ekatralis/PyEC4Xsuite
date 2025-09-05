@@ -13,7 +13,7 @@ import myfilemanager as mfm # Change for testing
 class XsuiteUniformBinSlicer:
 
     def __init__(self, particles: xt.Particles, n_slices: int = 10, 
-                 mode: Literal["percentile", "minmax"] = "minmax", percentile: float = 0.001,
+                 mode: Literal["percentile", "minmax"] = "minmax", percentile: float = 1e-4,
                  iter_mode: Literal["LeftToRight", "RightToLeft"] = "LeftToRight"):
         self.n_slices = n_slices
         self.n_bins = self.n_slices + 1
@@ -31,15 +31,20 @@ class XsuiteUniformBinSlicer:
         self.z_max = None
         self.bins = None
         self.particles = particles
+        self._set_active_particle_idx()
         self._set_bins()
+    
+    def _set_active_particle_idx(self):
+        self.active_particles = np.where(self.particles.state>0)[0]
+        self.active_particles_set = set(self.active_particles)
 
     def _get_beam_edges(self):
         if self.mode == "percentile":
-            self.z_min = np.percentile(self.particles.zeta, self.percentile)
-            self.z_max = np.percentile(self.particles.zeta, 100-self.percentile)
+            self.z_min = np.percentile(self.particles.zeta[self.active_particles], self.percentile)
+            self.z_max = np.percentile(self.particles.zeta[self.active_particles], 100-self.percentile)
         elif self.mode == "minmax":
-            self.z_min = np.min(self.particles.zeta)
-            self.z_max = np.max(self.particles.zeta)
+            self.z_min = np.min(self.particles.zeta[self.active_particles])
+            self.z_max = np.max(self.particles.zeta[self.active_particles])
         else:
             raise Exception(f"{self.mode} mode not supported")
 
@@ -60,7 +65,8 @@ class XsuiteUniformBinSlicer:
             cond = inside | (self.particles.zeta > self.bins[slice_num+1])
         else:
             cond = inside
-        particles_idx = self.particles.particle_id[np.where(cond)[0]]
+        particles_ids_in_bin = set(np.where(cond)[0])
+        particles_idx = list(self.active_particles_set.intersection(particles_ids_in_bin))
         return particles_idx
 
     def _get_slice(self, slice_num: int) -> dict:
