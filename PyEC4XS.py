@@ -10,6 +10,7 @@ import time
 # from . import myfilemanager as mfm
 import myfilemanager as mfm # Change for testing
 from scipy.constants import e as qe
+from scipy.constants import e as qe
 
 class XsuiteUniformBinSlicer:
 
@@ -401,9 +402,9 @@ class xEcloud:
                 if self.enable_kick_x:
                     particles.px[ix] += (1 + particles.delta[ix]) * fact_kick * Ex_sc_p
                 if self.enable_kick_y:
-                    particles.py[ix] += (1 + particles.delta[ix]) * fact_kick * Ey_sc_p
-            if self.enable_diagnostics:        
-                self._diagnostics_save(spacech_ele)
+                    particles.py[ix] += (1 + particles.delta) * fact_kick * Ey_sc_p
+                    
+            self._diagnostics_save(spacech_ele)
             self.t_sim += dt
             new_pass = False  # it can be true only for the first sub-slice of a slice
 
