@@ -234,7 +234,7 @@ class xEcloud:
             raise AssertionError("Module asssumes that all particles have the same charge")
 
         if self.verbose:
-            start_time = time.mktime(time.localtime())
+            start_time = time.time()
 
         self._reinitialize()
         slices = self.slicer(particles,**self.slicerKwargs)
@@ -247,8 +247,8 @@ class xEcloud:
         self._finalize()
 
         if self.verbose:
-            stop_time = time.mktime(time.localtime())
-            print("Done track %d in %.1f s" % (self.N_tracks, stop_time - start_time))
+            stop_time = time.time()
+            print("[PyEC4XS] Done track %d in %.3f s" % (self.N_tracks, stop_time - start_time))
 
         self.N_tracks += 1
 
