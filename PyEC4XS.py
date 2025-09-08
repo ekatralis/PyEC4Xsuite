@@ -391,17 +391,46 @@ class xEcloud:
 
                 ## compute cloud field on beam particles
                 Ex_sc_p, Ey_sc_p = spacech_ele.get_sc_eletric_field(MP_p)
+                
+                # Apply kick
+                if self.enable_kick_x or self.enable_kick_y:
+                    fact_kick = (
+                        charge
+                        / (particles.mass[ix] * particles.beta0[ix] * particles.beta0[ix] * particles.gamma0[ix] * c * c)
+                        * self.L_ecloud
+                    )
+                    dd  = particles.delta[ix]
+                    px0 = particles.px[ix]
+                    py0 = particles.py[ix]
+
+                    # current slopes from canonicals
+                    pn   = np.sqrt((1.0 + dd)**2 - px0**2 - py0**2)     # pz/P0
+                    xp   = px0 / pn
+                    yp   = py0 / pn
+
+                    # apply kick as slope increments (same as PyHEADTAIL)
+                    if self.enable_kick_x:
+                        xp  += fact_kick * Ex_sc_p
+                    if self.enable_kick_y:
+                        yp  += fact_kick * Ey_sc_p
+
+                    # write back EXACTLY to canonicals
+                    den   = np.sqrt(1.0 + xp**2 + yp**2)
+                    scale = (1.0 + dd) / den
+                    particles.px[ix] = scale * xp
+                    particles.py[ix] = scale * yp
+                # (delta unchanged if there's no Ez)
 
                 ## kick beam particles
-                fact_kick = (
-                    charge
-                    / (particles.mass[ix] * particles.beta0[ix] * particles.beta0[ix] * particles.gamma0[ix] * c * c)
-                    * self.L_ecloud
-                )
-                if self.enable_kick_x:
-                    particles.px[ix] += (1 + particles.delta[ix]) * fact_kick * Ex_sc_p
-                if self.enable_kick_y:
-                    particles.py[ix] += (1 + particles.delta[ix]) * fact_kick * Ey_sc_p
+                # fact_kick = (
+                #     charge
+                #     / (particles.mass[ix] * particles.beta0[ix] * particles.beta0[ix] * particles.gamma0[ix] * c * c)
+                #     * self.L_ecloud
+                # )
+                # if self.enable_kick_x:
+                #     particles.px[ix] += (1 + particles.delta[ix]) * fact_kick * Ex_sc_p
+                # if self.enable_kick_y:
+                #     particles.py[ix] += (1 + particles.delta[ix]) * fact_kick * Ey_sc_p
             
             if self.enable_diagnostics:
                 self._diagnostics_save(spacech_ele)
