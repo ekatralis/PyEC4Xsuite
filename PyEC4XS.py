@@ -76,7 +76,9 @@ class XsuiteUniformBinSlicer:
         gamma = 1/(np.sqrt(1-beta**2))
         dt = self.dz / (beta * c)
         z_mean = np.mean(self.particles.zeta[idx_particle_slice])
+        active_particles = len(idx_particle_slice)
         slice_dict = {
+            "num_active"   : active_particles,
             "particle_idx" : idx_particle_slice,
             "beta"         : beta,
             "zeta"         : z_mean,
