@@ -395,10 +395,11 @@ class xEcloud:
                 Ex_sc_p, Ey_sc_p = spacech_ele.get_sc_eletric_field(MP_p)
                 
                 # Apply kick
+                mass_kg = particles.mass[ix]* qe / c**2
                 if self.enable_kick_x or self.enable_kick_y:
                     fact_kick = (
                         charge
-                        / (particles.mass[ix] * particles.beta0[ix] * particles.beta0[ix] * particles.gamma0[ix] * c * c)
+                        / (mass_kg * particles.beta0[ix] * particles.beta0[ix] * particles.gamma0[ix] * c * c)
                         * self.L_ecloud
                     )
                     dd  = particles.delta[ix]
@@ -424,9 +425,10 @@ class xEcloud:
                 # (delta unchanged if there's no Ez)
 
                 ## kick beam particles
+                # mass_kg = particles.mass[ix]* qe / c**2
                 # fact_kick = (
                 #     charge
-                #     / (particles.mass[ix] * particles.beta0[ix] * particles.beta0[ix] * particles.gamma0[ix] * c * c)
+                #     / (mass_kg * particles.beta0[ix] * particles.beta0[ix] * particles.gamma0[ix] * c * c)
                 #     * self.L_ecloud
                 # )
                 # if self.enable_kick_x:
