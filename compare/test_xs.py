@@ -41,8 +41,8 @@ n_passages = 10
 
 # Slicer parameters
 n_slices = 64
-# slicer_config = dict(n_slices=n_slices, mode="percentile", percentile=0.1)
-slicer_config = dict(n_slices=n_slices, mode="minmax")
+slicer_config = dict(n_slices=n_slices, mode="percentile", percentile_pct=1e-4)
+# slicer_config = dict(n_slices=n_slices, mode="minmax")
 
 # Catch warning to fix bug
 # import warnings

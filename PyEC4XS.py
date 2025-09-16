@@ -14,7 +14,7 @@ from scipy.constants import e as qe
 class XsuiteUniformBinSlicer:
 
     def __init__(self, particles: xt.Particles, n_slices: int = 10, 
-                 mode: Literal["percentile", "minmax"] = "minmax", percentile: float = 1e-4,
+                 mode: Literal["percentile", "minmax"] = "minmax", percentile_pct: float = 1e-4,
                  iter_mode: Literal["LeftToRight", "RightToLeft"] = "LeftToRight"):
         self.n_slices = n_slices
         self.n_bins = self.n_slices + 1
@@ -27,15 +27,15 @@ class XsuiteUniformBinSlicer:
             raise ValueError("Invalid iter_mode")
         self.slice_list = slice_list
         self.mode = mode
-        self.percentile = percentile
+        self.percentile = percentile_pct
         self.z_min = None
         self.z_max = None
         self.bins = None
         self.particles = particles
         self._set_active_particle_idx()
         self._set_bins()
-        self.beta_avg = np.mean(self.particles.beta0[self.active_particles])
-        self.gamma_avg = np.mean(self.particles.gamma0[self.active_particles])
+        self.beta_avg = np.nan_to_num(np.mean(self.particles.beta0[self.active_particles]))
+        self.gamma_avg = np.nan_to_num(np.mean(self.particles.gamma0[self.active_particles]))
     
     def _set_active_particle_idx(self):
         self.active_particles = np.where(self.particles.state>0)[0]
@@ -64,7 +64,7 @@ class XsuiteUniformBinSlicer:
         inside = (self.bins[slice_num] < self.particles.zeta) & (self.particles.zeta <= self.bins[slice_num+1])
         if slice_num == 0:
             cond = inside | (self.particles.zeta <= self.bins[slice_num]) 
-        elif slice_num == self.n_slices:
+        elif slice_num == self.n_slices-1:
             cond = inside | (self.particles.zeta > self.bins[slice_num+1])
         else:
             cond = inside
