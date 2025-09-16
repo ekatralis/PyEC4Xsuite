@@ -206,11 +206,11 @@ class xEcloud:
         if "enable_kick_x" in kwargs:
             self.enable_kick_x = kwargs["enable_kick_x"]
         if not self.enable_kick_x:
-            print("Horizontal kick on the beam is disabled!")
+            self._print("Horizontal kick on the beam is disabled!")
         if "enable_kick_y" in kwargs:
             self.enable_kick_y = kwargs["enable_kick_y"]
         if not self.enable_kick_y:
-            print("Vertical kick on the beam is disabled!")
+            self._print("Vertical kick on the beam is disabled!")
         
         self.initial_MP_e_clouds = [
             cl.MP_e.extract_dict() for cl in self.cloudsim.cloud_list
@@ -233,7 +233,7 @@ class xEcloud:
     def track(self, particles: xt.Particles):
         if self.track_only_first_time:
             if self.N_tracks > 0:
-                print("Warning: Track skipped because track_only_first_time is True.")
+                self._print("Warning: Track skipped because track_only_first_time is True.")
                 return
             
         # Initial assumptions to get module up and running.
@@ -257,7 +257,7 @@ class xEcloud:
 
         if self.verbose:
             stop_time = time.time()
-            print("[PyEC4XS] Done track %d in %.3f s" % (self.N_tracks, stop_time - start_time))
+            self._print("Done track %d in %.3f s" % (self.N_tracks, stop_time - start_time))
 
         self.N_tracks += 1
 
@@ -511,7 +511,7 @@ class xEcloud:
             self._diagnostics_finalize()
     
     def finalize_and_reinitialize(self):
-        print("Exec. finalize and reinitialize")
+        self._print("Exec. finalize and reinitialize")
         self._finalize()
         self._reinitialize()
 
@@ -696,3 +696,6 @@ class xEcloud:
 
             self.Ex_ele_last_track_at_probes.append(Ex_sc_probe.copy())
             self.Ey_ele_last_track_at_probes.append(Ey_sc_probe.copy())
+
+    def _print(self,output):
+        print("[PyEC4XS] " + output)
