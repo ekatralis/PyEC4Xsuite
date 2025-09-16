@@ -149,6 +149,7 @@ class Empty():
 
 class xEcloud:
     needs_cpu = True
+    iscollective = True
     def __init__(self,
                  L_ecloud,
                  slicer,
