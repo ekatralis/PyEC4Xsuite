@@ -219,7 +219,10 @@ class xEcloud:
         self.beam_PyPIC_state = self.cloudsim.spacech_ele.PyPICobj.get_state_object()
         
         if self.enable_diagnostics:
+            self._print("Diagnostics enabled")
             self._diagnostics_init()
+        else:
+            self._print("Diagnostics disabled. Use enable_diagnostics flag to enable")
 
         self.track_only_first_time = False
         self.kick_mode_for_beam_field = kick_mode_for_beam_field
@@ -697,5 +700,5 @@ class xEcloud:
             self.Ex_ele_last_track_at_probes.append(Ex_sc_probe.copy())
             self.Ey_ele_last_track_at_probes.append(Ey_sc_probe.copy())
 
-    def _print(self,output):
-        print("[PyEC4XS] " + output)
+    def _print(self, *values, sep=' ', end='\n', file=None, flush=False):
+        print("[PyEC4XS]", *values, sep=sep, end=end, file=file, flush=flush)
