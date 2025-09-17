@@ -12,6 +12,16 @@ sys.path.append("../")
 from PyEC4XS import xEcloud,XsuiteUniformBinSlicer   # ensure it exposes same knobs as below
 from sim_config_manager import SimConfig
 from tqdm import tqdm
+import matplotlib.pyplot as plt
+import os
+import shutil
+
+if os.path.exists("./xsout"):
+    shutil.rmtree("./xsout")
+os.makedirs("./xsout")
+os.makedirs("./xsout/phi_ele")
+os.makedirs("./xsout/phi_beam")
+os.makedirs("./xsout/phi_comb")
 
 
 # Define conversion functions between Xsuite and PyHEADTAIL coordinates
@@ -136,8 +146,11 @@ ec = xEcloud(
     enable_kick_x=pp.enable_kick_x,
     enable_kick_y=pp.enable_kick_y,
     x_beam_offset = 1e-3,
-    y_beam_offset = -1e-3
+    y_beam_offset = -1e-3,
+    enable_diagnostics=True
 )
+ec.save_ele_potential_and_field = True
+ec.save_beam_potential_and_field = True
 
 # Simple line: just the EC element
 line = xt.Line(elements=[ec])
@@ -153,6 +166,9 @@ print(f"YP:{np.mean(yp_)}")
 print(f"X:{np.mean(parts.x)}")
 print(f"Y:{np.mean(parts.y)}")
 
+k=0
+j=0
+u=0
 for i in tqdm(range(n_passages)):
     xp_, yp_ = pxpy_to_slopes(parts.px,parts.py,parts.delta)
     xp_mean_before = np.mean(xp_[parts.state>0])
@@ -163,6 +179,45 @@ for i in tqdm(range(n_passages)):
     yp_mean_after = np.mean(yp_[parts.state>0])
     kicks_x.append(xp_mean_after - xp_mean_before)
     kicks_y.append(yp_mean_after - yp_mean_before)
+    if i==0:
+        vmin_ele = min(phi.min() for phi in ec.phi_ele_last_track)
+        vmax_ele = max(phi.max() for phi in ec.phi_ele_last_track)
+        vmin_beam = min(phi.min() for phi in ec.phi_beam_last_track)
+        vmax_beam = max(phi.max() for phi in ec.phi_beam_last_track)
+        k+=len(ec.phi_ele_last_track)
+        j+=len(ec.phi_beam_last_track)
+        u+=len(ec.phi_beam_last_track)
+    else:
+        for phi in ec.phi_ele_last_track:
+            im = plt.imshow(phi, origin='lower', aspect='auto', interpolation='nearest',
+                            cmap=plt.cm.viridis,vmin = vmin_ele, vmax=vmax_ele)
+            plt.colorbar(im, label='value')
+            plt.xlabel('column index')
+            plt.ylabel('row index')
+            plt.title(f'Electron Potential {k}')
+            plt.savefig(f"./xsout/phi_ele/phi_frame_{k}.png")
+            plt.clf()
+            k+=1
+        for phi in ec.phi_beam_last_track:
+            im = plt.imshow(phi, origin='lower', aspect='auto', interpolation='nearest',
+                            cmap=plt.cm.viridis, vmin=vmin_beam, vmax=vmax_beam)
+            plt.colorbar(im, label='value')
+            plt.xlabel('column index')
+            plt.ylabel('row index')
+            plt.title(f'Beam Potential {j}')
+            plt.savefig(f"./xsout/phi_beam/phi_frame_{j}.png")
+            plt.clf()
+            j+=1
+        for phi1,phi2 in zip(ec.phi_ele_last_track,ec.phi_beam_last_track):
+            im = plt.imshow(phi1+phi2, origin='lower', aspect='auto', interpolation='nearest',
+                            cmap=plt.cm.viridis, vmin=vmin_ele, vmax=vmax_beam)
+            plt.colorbar(im, label='value')
+            plt.xlabel('column index')
+            plt.ylabel('row index')
+            plt.title(f'Potential {u}')
+            plt.savefig(f"./xsout/phi_comb/phi_frame_{u}.png")
+            plt.clf()
+            u+=1
 
 # Save for comparison
 kicks_x = np.array(kicks_x, dtype=float)

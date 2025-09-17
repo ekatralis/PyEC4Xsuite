@@ -11,7 +11,16 @@ from PyHEADTAIL.particles.generators import ParticleGenerator
 from PyECLOUD.PyEC4PyHT import Ecloud
 from sim_config_manager import SimConfig
 from tqdm import tqdm
+import matplotlib.pyplot as plt
+import os
+import shutil
 
+if os.path.exists("./pyhtout"):
+    shutil.rmtree("./pyhtout")
+os.makedirs("./pyhtout")
+os.makedirs("./pyhtout/phi_ele")
+os.makedirs("./pyhtout/phi_beam")
+os.makedirs("./pyhtout/phi_comb")
 # ---- Common parameters (mirrored in Xsuite script) ----
 q0 = 1.602176634e-19
 clight = 299792458.0
@@ -110,7 +119,8 @@ ec = Ecloud(
     x_beam_offset = 1e-3,
     y_beam_offset = -1e-3
 )
-
+ec.save_ele_potential_and_field = True
+ec.save_beam_potential_and_field = True
 
 # ---- Tracking over multiple passages ----
 kicks_x = []
@@ -121,6 +131,9 @@ print(f"YP:{np.mean(bunch.yp)}")
 print(f"X:{np.mean(bunch.x)}")
 print(f"Y:{np.mean(bunch.y)}")
 
+k=0
+j=0
+u=0
 for i in tqdm(range(n_passages)):
     xp_mean_before = np.mean(bunch.xp)
     yp_mean_before = np.mean(bunch.yp)
@@ -129,6 +142,45 @@ for i in tqdm(range(n_passages)):
     yp_mean_after = np.mean(bunch.yp)
     kicks_x.append(xp_mean_after - xp_mean_before)
     kicks_y.append(yp_mean_after - yp_mean_before)
+    if i==0:
+        vmin_ele = min(phi.min() for phi in ec.phi_ele_last_track)
+        vmax_ele = max(phi.max() for phi in ec.phi_ele_last_track)
+        vmin_beam = min(phi.min() for phi in ec.phi_beam_last_track)
+        vmax_beam = max(phi.max() for phi in ec.phi_beam_last_track)
+        k+=len(ec.phi_ele_last_track)
+        j+=len(ec.phi_beam_last_track)
+        u+=len(ec.phi_beam_last_track)
+    else:
+        for phi in ec.phi_ele_last_track:
+            im = plt.imshow(phi, origin='lower', aspect='auto', interpolation='nearest',
+                            cmap=plt.cm.viridis,vmin = vmin_ele, vmax=vmax_ele)
+            plt.colorbar(im, label='value')
+            plt.xlabel('column index')
+            plt.ylabel('row index')
+            plt.title(f'Electron Potential {k}')
+            plt.savefig(f"./pyhtout/phi_ele/phi_frame_{k}.png")
+            plt.clf()
+            k+=1
+        for phi in ec.phi_beam_last_track:
+            im = plt.imshow(phi, origin='lower', aspect='auto', interpolation='nearest',
+                            cmap=plt.cm.viridis, vmin=vmin_beam, vmax=vmax_beam)
+            plt.colorbar(im, label='value')
+            plt.xlabel('column index')
+            plt.ylabel('row index')
+            plt.title(f'Beam Potential {j}')
+            plt.savefig(f"./pyhtout/phi_beam/phi_frame_{j}.png")
+            plt.clf()
+            j+=1
+        for phi1,phi2 in zip(ec.phi_ele_last_track,ec.phi_beam_last_track):
+            im = plt.imshow(phi1+phi2, origin='lower', aspect='auto', interpolation='nearest',
+                            cmap=plt.cm.viridis, vmin=vmin_ele, vmax=vmax_beam)
+            plt.colorbar(im, label='value')
+            plt.xlabel('column index')
+            plt.ylabel('row index')
+            plt.title(f'Beam Potential {u}')
+            plt.savefig(f"./pyhtout/phi_comb/phi_frame_{u}.png")
+            plt.clf()
+            u+=1
 
 # Save for comparison
 kicks_x = np.array(kicks_x, dtype=float)
