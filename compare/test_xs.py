@@ -80,7 +80,7 @@ x     = dat["x"]
 xp_    = dat["xp"]     
 y     = dat["y"]
 yp_    = dat["yp"]
-zeta  = -dat["z"]      
+zeta  = -dat["z"]      #z coordinate in xsuite is flipped
 delta = dat["dp"]
 
 px, py = slopes_to_pxpy(xp_, yp_, delta)
