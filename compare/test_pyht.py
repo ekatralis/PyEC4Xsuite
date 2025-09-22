@@ -37,7 +37,7 @@ n_passages = 10
 # Slicer parameters
 n_slices = 64
 # slicer = UniformBinSlicer(n_slices, z_cuts=(-4*sigz, 4*sigz))
-slicer = UniformBinSlicer(n_slices)
+slicer = UniformBinSlicer(n_slices,z_cuts=(-5.1*sigz, 5.1*sigz))
 
 # Generate Bunch
 from machines_for_testing import SPS
@@ -46,7 +46,6 @@ epsn_x = 2.5e-6
 epsn_y = 2.5e-6
 machine = SPS(n_segments=N_kicks, machine_configuration='Q20-injection', accQ_x=20., accQ_y=20.)
 bunch = machine.generate_6D_Gaussian_bunch(n_macroparticles=300000, intensity=1.15e11, epsn_x=epsn_x, epsn_y=epsn_y, sigma_z=0.2)
-
 
 
 # Export PyHEADTAIL bunch to have an identical one in Xsuite

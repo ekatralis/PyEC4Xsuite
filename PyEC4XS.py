@@ -11,85 +11,43 @@ import time
 import myfilemanager as mfm # Change for testing
 from scipy.constants import e as qe
 
-class XsuiteUniformBinSlicer:
+class IterableSlices:
 
-    def __init__(self, particles: xt.Particles, n_slices: int = 10, 
-                 mode: Literal["percentile", "minmax"] = "minmax", percentile_pct: float = 1e-4,
-                 iter_mode: Literal["LeftToRight", "RightToLeft"] = "LeftToRight"):
-        self.n_slices = n_slices
+    def __init__(self, particles: xt.Particles, slicer: xf.TempSlicer,
+                 iter_mode = "Default"):
+        assert iter_mode in ["Default", "Reverse"]
+        self.slicer = slicer
+        self.n_slices = slicer.num_slices
+        self.slice_particle_list = []
+        slicer.assign_slices(particles=particles)
+        for num_slice in range(self.n_slices):
+            self.slice_particle_list.append(np.where(particles.slice==num_slice)[0])
         self.n_bins = self.n_slices + 1
-        slice_list = list(range(n_slices))
-        if iter_mode == "LeftToRight":
+        self.slice_list = list(range(self.n_slices))
+        if iter_mode == "Default":
             pass
-        elif iter_mode == "RightToLeft":
-            slice_list.reverse()
+        elif iter_mode == "Reverse":
+            self.slice_list.reverse()
         else:
             raise ValueError("Invalid iter_mode")
-        self.slice_list = slice_list
-        self.mode = mode
-        self.percentile = percentile_pct
-        self.z_min = None
-        self.z_max = None
-        self.bins = None
-        self.particles = particles
-        self._set_active_particle_idx()
-        self._set_bins()
-        self.beta_avg = np.nan_to_num(np.mean(self.particles.beta0[self.active_particles]))
-        self.gamma_avg = np.nan_to_num(np.mean(self.particles.gamma0[self.active_particles]))
-    
-    def _set_active_particle_idx(self):
-        self.active_particles = np.where(self.particles.state>0)[0]
-        self.active_particles_set = set(self.active_particles)
-
-    def _get_beam_edges(self):
-        if self.mode == "percentile":
-            self.z_min = np.percentile(self.particles.zeta[self.active_particles], self.percentile)
-            self.z_max = np.percentile(self.particles.zeta[self.active_particles], 100-self.percentile)
-        elif self.mode == "minmax":
-            self.z_min = np.min(self.particles.zeta[self.active_particles])
-            self.z_max = np.max(self.particles.zeta[self.active_particles])
-        else:
-            raise Exception(f"{self.mode} mode not supported")
-
-    def _set_bins(self) -> np.ndarray:
-        self._get_beam_edges()
-        self.bins = np.linspace(self.z_min,self.z_max,self.n_bins)
-        self.dz = self.bins[1] - self.bins[0]
-        return self.bins
-
-    def _particles_in_slice(self, slice_num: int) -> np.ndarray:
-        cond = None
-        if slice_num > self.n_slices-1:
-            raise Exception(f"Slice {slice_num} is out of bounds for number of slices: {self.n_slices}. Slices are 0 indexed")
-        inside = (self.bins[slice_num] < self.particles.zeta) & (self.particles.zeta <= self.bins[slice_num+1])
-        if slice_num == 0:
-            cond = inside | (self.particles.zeta <= self.bins[slice_num]) 
-        elif slice_num == self.n_slices-1:
-            cond = inside | (self.particles.zeta > self.bins[slice_num+1])
-        else:
-            cond = inside
-        particles_ids_in_bin = set(np.where(cond)[0])
-        particles_idx = list(self.active_particles_set.intersection(particles_ids_in_bin))
-        return particles_idx
+        assert (particles.beta0 == particles.beta0[0]).all()
+        assert (particles.gamma0 == particles.gamma0[0]).all()
+        self.beta = particles.beta0[0]
+        self.gamma = particles.gamma0[0]
 
     def _get_slice(self, slice_num: int) -> dict:
-        idx_particle_slice = self._particles_in_slice(slice_num)
+        idx_particle_slice = self.slice_particle_list[slice_num]
         active_particles = len(idx_particle_slice)
-        if active_particles > 0:
-            beta = np.mean(self.particles.beta0[idx_particle_slice])
-            gamma = 1/(np.sqrt(1-beta**2))
-        else:
-            beta = self.beta_avg
-            gamma = self.gamma_avg
-        dt = self.dz / (beta * c)
-        z_center = (self.bins[slice_num+1] + self.bins[slice_num]) / 2
+        dz = self.slicer.bin_widths_beamstrahlung[slice_num]
+        dt = dz / (self.beta * c)
+        z_center = self.slicer.bin_centers[slice_num]
         slice_dict = {
             "num_active"   : active_particles,
             "particle_idx" : idx_particle_slice,
-            "beta"         : beta,
+            "beta"         : self.beta,
             "zeta"         : z_center,
-            "gamma"        : gamma,
-            "dz"           : self.dz,
+            "gamma"        : self.gamma,
+            "dz"           : dz,
             "dt"           : dt, 
             "slice_num"   : f"{slice_num+1}/{self.n_slices}"
         }
@@ -153,7 +111,6 @@ class xEcloud:
     def __init__(self,
                  L_ecloud,
                  slicer,
-                 slicerKwargs,
                  Dt_ref,
                  pyecl_input_folder="./",
                  flag_clean_slices = False,
@@ -166,7 +123,6 @@ class xEcloud:
                  **kwargs
                 ):
         self.slicer = slicer
-        self.slicerKwargs = slicerKwargs
         self.Dt_ref = Dt_ref
         self.L_ecloud = L_ecloud
         self.verbose = verbose
@@ -223,7 +179,8 @@ class xEcloud:
             self._diagnostics_init()
         else:
             self._print("Diagnostics disabled. Use enable_diagnostics flag to enable")
-
+        self.slices_iter_mode = "Default"
+        self._print(f"Iterable Mode for slices is set to '{self.slices_iter_mode}'")
         self.track_only_first_time = False
         self.kick_mode_for_beam_field = kick_mode_for_beam_field
         self.force_interp_at_substeps_interacting_slices = force_interp_at_substeps_interacting_slices
@@ -249,7 +206,7 @@ class xEcloud:
             start_time = time.time()
 
         self._reinitialize()
-        slices = self.slicer(particles,**self.slicerKwargs)
+        slices = IterableSlices(particles=particles,slicer=self.slicer,iter_mode=self.slices_iter_mode)
         force_newpass = True
         for slice in slices:
             self._track_single_slice(particles=particles,slice=slice,force_pyecl_newpass=force_newpass)
