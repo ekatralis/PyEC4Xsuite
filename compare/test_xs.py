@@ -9,7 +9,8 @@ import xtrack as xt
 
 import sys
 sys.path.append("../")
-from PyEC4XS import xEcloud,XsuiteUniformBinSlicer   # ensure it exposes same knobs as below
+import xfields as xf
+from PyEC4XS import xEcloud   # ensure it exposes same knobs as below
 from sim_config_manager import SimConfig
 from tqdm import tqdm
 import matplotlib.pyplot as plt
@@ -51,7 +52,9 @@ n_passages = 10
 
 # Slicer parameters
 n_slices = 64
-slicer_config = dict(n_slices=n_slices, mode="percentile", percentile_pct=1e-4)
+
+slicer=xf.TempSlicer(n_slices=n_slices,sigma_z=sigz)
+# slicer_config = dict(n_slices=n_slices, mode="percentile", percentile_pct=1e-4)
 # slicer_config = dict(n_slices=n_slices, mode="minmax")
 
 # Catch warning to fix bug
@@ -77,7 +80,7 @@ x     = dat["x"]
 xp_    = dat["xp"]     
 y     = dat["y"]
 yp_    = dat["yp"]
-zeta  = dat["z"]      
+zeta  = -dat["z"]      
 delta = dat["dp"]
 
 px, py = slopes_to_pxpy(xp_, yp_, delta)
@@ -124,8 +127,7 @@ else:
 # ---- ECLOUD element in Xsuite ----
 ec = xEcloud(
     L_ecloud=L_ec,
-    slicer=XsuiteUniformBinSlicer,
-    slicerKwargs=slicer_config,
+    slicer=slicer,
     Dt_ref=pp.Dt_ref,
     pyecl_input_folder=pp.pyecl_input_folder,
     chamb_type=pp.chamb_type,
