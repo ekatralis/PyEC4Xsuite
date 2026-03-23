@@ -1,4 +1,5 @@
 # test_xsuite.py
+import argparse
 import numpy as np
 np.random.seed(42)
 import random
@@ -17,6 +18,15 @@ from tqdm import tqdm
 import matplotlib.pyplot as plt
 import os
 import shutil
+
+parser = argparse.ArgumentParser()
+parser.add_argument(
+    "--mode",
+    choices=("direct", "line"),
+    default="direct",
+    help="Track the e-cloud either directly or through an xt.Line.",
+)
+args = parser.parse_args()
 
 if os.path.exists("./xsout"):
     shutil.rmtree("./xsout")
@@ -150,6 +160,12 @@ ec = xEcloud(
 ec.save_ele_potential_and_field = True
 ec.save_beam_potential_and_field = True
 
+line = None
+if args.mode == "line":
+    # line = xt.Line(elements=[xt.Drift(length=0.0), ec, xt.Drift(length=0.0)])
+    line = xt.Line(elements=[ec])
+    line.build_tracker(_context=context)
+
 # ---- Track and record kicks over passages ----
 kicks_x = []
 kicks_y = []
@@ -165,7 +181,10 @@ u=0
 for i in tqdm(range(n_passages)):
     xp_mean_before = np.mean(parts.px[parts.state>0])
     yp_mean_before = np.mean(parts.py[parts.state>0])
-    ec.track(parts)
+    if args.mode == "line":
+        line.track(parts, num_turns=1)
+    else:
+        ec.track(parts)
     xp_mean_after = np.mean(parts.px[parts.state>0])
     yp_mean_after = np.mean(parts.py[parts.state>0])
     kicks_x.append(xp_mean_after - xp_mean_before)
