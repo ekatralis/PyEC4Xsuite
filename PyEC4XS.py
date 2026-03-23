@@ -372,26 +372,13 @@ class xEcloud:
                         / (mass_kg * particles.beta0[ix] * particles.beta0[ix] * particles.gamma0[ix] * c * c)
                         * self.L_ecloud
                     )
-                    dd  = particles.delta[ix]
-                    px0 = particles.px[ix]
-                    py0 = particles.py[ix]
-
-                    # current slopes from canonicals
-                    pn   = np.sqrt((1.0 + dd)**2 - px0**2 - py0**2)     # pz/P0
-                    xp   = px0 / pn
-                    yp   = py0 / pn
 
                     # apply kick as slope increments (same as PyHEADTAIL)
                     if self.enable_kick_x:
-                        xp  += fact_kick * Ex_sc_p
+                        particles.px[ix]  += fact_kick * Ex_sc_p
                     if self.enable_kick_y:
-                        yp  += fact_kick * Ey_sc_p
+                        particles.py[ix]  += fact_kick * Ey_sc_p
 
-                    # write back EXACTLY to canonicals
-                    den   = np.sqrt(1.0 + xp**2 + yp**2)
-                    scale = (1.0 + dd) / den
-                    particles.px[ix] = scale * xp
-                    particles.py[ix] = scale * yp
                 # (delta unchanged if there's no Ez)
 
                 ## kick beam particles

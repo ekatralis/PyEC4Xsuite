@@ -25,18 +25,6 @@ os.makedirs("./xsout/phi_beam")
 os.makedirs("./xsout/phi_comb")
 
 
-# Define conversion functions between Xsuite and PyHEADTAIL coordinates
-def slopes_to_pxpy(xp, yp, delta):
-    den = np.sqrt(1.0 + xp**2 + yp**2)              # = |p| / p_s
-    px = (1.0 + delta) * xp / den                   # px = p_x / p0
-    py = (1.0 + delta) * yp / den
-    return px, py
-
-def pxpy_to_slopes(px, py, delta):
-    ps_over_p0 = np.sqrt((1.0 + delta)**2 - px**2 - py**2)
-    xp = px / ps_over_p0
-    yp = py / ps_over_p0
-    return xp, yp
 
 # ---- Common parameters ----
 q0 = 1.602176634e-19
@@ -77,13 +65,11 @@ dat = np.load("bunch_pyht.npz")
 ref = np.load("bunch_ref.npz")
 
 x     = dat["x"]
-xp_    = dat["xp"]     
+px    = dat["xp"]     
 y     = dat["y"]
-yp_    = dat["yp"]
-zeta  = -dat["z"]      #z coordinate in xsuite is flipped
+py    = dat["yp"]
+zeta  = dat["z"]
 delta = dat["dp"]
-
-px, py = slopes_to_pxpy(xp_, yp_, delta)
 
 
 # Reference particle
@@ -162,9 +148,8 @@ tracker = xt.Tracker(line=line, _context=context)
 kicks_x = []
 kicks_y = []
 print("BEAM SPECS:")
-xp_, yp_ = pxpy_to_slopes(parts.px,parts.py,delta)
-print(f"XP:{np.mean(xp_)}")
-print(f"YP:{np.mean(yp_)}")
+print(f"XP:{np.mean(parts.px)}")
+print(f"YP:{np.mean(parts.py)}")
 print(f"X:{np.mean(parts.x)}")
 print(f"Y:{np.mean(parts.y)}")
 
@@ -172,13 +157,11 @@ k=0
 j=0
 u=0
 for i in tqdm(range(n_passages)):
-    xp_, yp_ = pxpy_to_slopes(parts.px,parts.py,parts.delta)
-    xp_mean_before = np.mean(xp_[parts.state>0])
-    yp_mean_before = np.mean(yp_[parts.state>0])
+    xp_mean_before = np.mean(parts.px[parts.state>0])
+    yp_mean_before = np.mean(parts.py[parts.state>0])
     line.track(parts, num_turns=1) 
-    xp_, yp_ = pxpy_to_slopes(parts.px,parts.py,parts.delta)
-    xp_mean_after = np.mean(xp_[parts.state>0])
-    yp_mean_after = np.mean(yp_[parts.state>0])
+    xp_mean_after = np.mean(parts.px[parts.state>0])
+    yp_mean_after = np.mean(parts.py[parts.state>0])
     kicks_x.append(xp_mean_after - xp_mean_before)
     kicks_y.append(yp_mean_after - yp_mean_before)
     if i==0:
