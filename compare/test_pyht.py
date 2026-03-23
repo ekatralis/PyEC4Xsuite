@@ -1,6 +1,7 @@
 # test_pyht.py
 import numpy as np
 np.random.seed(42)
+import random
 
 from PyHEADTAIL.particles.slicing import UniformBinSlicer
 from PyHEADTAIL.particles.particles import Particles
@@ -29,6 +30,7 @@ clight = 299792458.0
 sigx = 1.0e-3
 sigy = 1.0e-3
 sigz = 0.075
+z_cut_sigmas = 5.1
 
 # Ecloud parameters
 L_ec = 10.0
@@ -36,8 +38,8 @@ n_passages = 10
 
 # Slicer parameters
 n_slices = 64
-# slicer = UniformBinSlicer(n_slices, z_cuts=(-4*sigz, 4*sigz))
-slicer = UniformBinSlicer(n_slices,z_cuts=(-5.1*sigz, 5.1*sigz))
+z_cuts = (-z_cut_sigmas * sigz, z_cut_sigmas * sigz)
+slicer = UniformBinSlicer(n_slices, z_cuts=z_cuts)
 
 # Generate Bunch
 from machines_for_testing import SPS
@@ -45,7 +47,13 @@ N_kicks = 1
 epsn_x = 2.5e-6
 epsn_y = 2.5e-6
 machine = SPS(n_segments=N_kicks, machine_configuration='Q20-injection', accQ_x=20., accQ_y=20.)
-bunch = machine.generate_6D_Gaussian_bunch(n_macroparticles=300000, intensity=1.15e11, epsn_x=epsn_x, epsn_y=epsn_y, sigma_z=0.2)
+bunch = machine.generate_6D_Gaussian_bunch(
+    n_macroparticles=300000,
+    intensity=1.15e11,
+    epsn_x=epsn_x,
+    epsn_y=epsn_y,
+    sigma_z=sigz,
+)
 
 
 # Export PyHEADTAIL bunch to have an identical one in Xsuite
@@ -68,7 +76,14 @@ gamma = machine.gamma
 m0_eV = 938.2720813e6
 beta = np.sqrt(1 - 1/gamma**2)
 p0c_eV = beta * gamma * m0_eV
-np.savez_compressed("bunch_ref.npz", p0c_eV=p0c_eV, gamma=gamma)
+np.savez_compressed(
+    "bunch_ref.npz",
+    p0c_eV=p0c_eV,
+    gamma=gamma,
+    sigma_z=sigz,
+    n_slices=n_slices,
+    z_cuts=np.array(z_cuts, dtype=float),
+)
 
 # Import PyECLOUD config as in PyPARIS_sim_class
 pp = SimConfig("./Simulation_parameters.py")
@@ -93,6 +108,9 @@ else:
     }
 
 # ---- ECLOUD element ----
+ecloud_seed = 123456
+np.random.seed(ecloud_seed)
+random.seed(ecloud_seed)
 ec = Ecloud(
     L_ecloud=L_ec,
     slicer=slicer,

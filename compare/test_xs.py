@@ -1,6 +1,7 @@
 # test_xsuite.py
 import numpy as np
 np.random.seed(42)
+import random
 
 # Xsuite basics
 import xobjects as xo
@@ -38,12 +39,13 @@ sigz = 0.075
 L_ec = 10.0
 n_passages = 10
 
-# Slicer parameters
-n_slices = 64
-
-slicer=xf.TempSlicer(n_slices=n_slices,sigma_z=sigz)
-# slicer_config = dict(n_slices=n_slices, mode="percentile", percentile_pct=1e-4)
-# slicer_config = dict(n_slices=n_slices, mode="minmax")
+def make_pyht_compatible_slicer(n_slices, z_cuts):
+    z_tail, z_head = map(float, z_cuts)
+    template = xf.TempSlicer(n_slices=n_slices, sigma_z=1.0)
+    template_half_range = np.max(np.abs(template.bin_edges))
+    target_half_range = max(abs(z_tail), abs(z_head))
+    sigma_z_equiv = target_half_range / template_half_range
+    return xf.TempSlicer(n_slices=n_slices, sigma_z=sigma_z_equiv)
 
 # Catch warning to fix bug
 # import warnings
@@ -70,6 +72,11 @@ y     = dat["y"]
 py    = dat["yp"]
 zeta  = dat["z"]
 delta = dat["dp"]
+
+# Build the Xsuite slicer from the exact PyHEADTAIL bin cuts.
+z_cuts = tuple(ref["z_cuts"]) if "z_cuts" in ref.files else (-5.1 * sigz, 5.1 * sigz)
+n_slices = int(ref["n_slices"]) if "n_slices" in ref.files else 64
+slicer = make_pyht_compatible_slicer(n_slices=n_slices, z_cuts=z_cuts)
 
 
 # Reference particle
@@ -111,6 +118,9 @@ else:
     }
 
 # ---- ECLOUD element in Xsuite ----
+ecloud_seed = 123456
+np.random.seed(ecloud_seed)
+random.seed(ecloud_seed)
 ec = xEcloud(
     L_ecloud=L_ec,
     slicer=slicer,
@@ -140,10 +150,6 @@ ec = xEcloud(
 ec.save_ele_potential_and_field = True
 ec.save_beam_potential_and_field = True
 
-# Simple line: just the EC element
-line = xt.Line(elements=[ec])
-tracker = xt.Tracker(line=line, _context=context)
-
 # ---- Track and record kicks over passages ----
 kicks_x = []
 kicks_y = []
@@ -159,7 +165,7 @@ u=0
 for i in tqdm(range(n_passages)):
     xp_mean_before = np.mean(parts.px[parts.state>0])
     yp_mean_before = np.mean(parts.py[parts.state>0])
-    line.track(parts, num_turns=1) 
+    ec.track(parts)
     xp_mean_after = np.mean(parts.px[parts.state>0])
     yp_mean_after = np.mean(parts.py[parts.state>0])
     kicks_x.append(xp_mean_after - xp_mean_before)
