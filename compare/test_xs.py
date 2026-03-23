@@ -8,11 +8,8 @@ import random
 import xobjects as xo
 import xpart as xp
 import xtrack as xt
-
-import sys
-sys.path.append("../")
 import xfields as xf
-from PyEC4XS import xEcloud   # ensure it exposes same knobs as below
+from PyEC4XS import xEcloud  
 from sim_config_manager import SimConfig
 from tqdm import tqdm
 import matplotlib.pyplot as plt

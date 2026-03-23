@@ -1,0 +1,6 @@
+include LICENSE
+include README.md
+global-exclude __pycache__
+global-exclude *.py[cod]
+graft PyEC4XS
+prune compare
