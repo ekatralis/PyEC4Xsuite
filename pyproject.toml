@@ -1,0 +1,50 @@
+[project]
+name = "PyEC4XS"
+dynamic = ["version"]
+description = "PyECLOUD interface with Xsuite"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [
+  { name = "Evangelos Katralis", email = "evangelos.katralis@cern.ch" },
+]
+dependencies = [
+  "numpy",
+  "scipy",
+  "xsuite"
+]
+
+# Optional but recommended:
+classifiers = [
+  "Development Status :: 5 - Alpha",
+  "Intended Audience :: Science/Research",
+  "Intended Audience :: Developers",
+  "Topic :: Scientific/Engineering",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+
+  # Only tested on Linux and macOS so far, but Windows is now experimentally supported
+  "Operating System :: POSIX :: Linux",
+  "Operating System :: MacOS :: MacOS X",
+]
+
+[project.urls]
+"Homepage" = "https://github.com/ekatralis/PyEC4XS"
+"Source"   = "https://github.com/ekatralis/PyEC4XS"
+"Issues"   = "https://github.com/ekatralis/PyEC4XS/issues"
+
+[project.optional-dependencies]
+dev = [
+  "pytest",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "PyEC4XS._version.__version__"}
+
+[build-system]
+requires = [
+  "setuptools>=61",
+  "wheel",
+]
+build-backend = "setuptools.build_meta"

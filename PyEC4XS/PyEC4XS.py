@@ -7,8 +7,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from scipy.constants import c
 import time
-# from . import myfilemanager as mfm
-import myfilemanager as mfm # Change for testing
+from . import myfilemanager as mfm
 from scipy.constants import e as qe
 
 class IterableSlices:

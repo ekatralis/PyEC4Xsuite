@@ -17,3 +17,4 @@ compare/*out*
 *__pycache__*
 *_testfiles*
 *.pkl*
+*.egg-info/
