@@ -224,16 +224,13 @@ class xEcloud:
     def _track_single_slice(self, particles: xt.Particles, slice: dict, force_pyecl_newpass: bool = False):
         spacech_ele = self.cloudsim.spacech_ele
         # Check if the slice interacts with the beam
-        if slice["num_active"] > 0:
-            if "slice_info" in list(slice.keys()):
-                if "interact_with_EC" in list(slice["slice_info"].keys()):
-                    interact_with_EC = slice["slice_info"]["interact_with_EC"]
-                else:
-                    interact_with_EC = True
+        if "slice_info" in list(slice.keys()):
+            if "interact_with_EC" in list(slice["slice_info"].keys()):
+                interact_with_EC = slice["slice_info"]["interact_with_EC"]
             else:
                 interact_with_EC = True
         else:
-            interact_with_EC = False
+            interact_with_EC = True
         
         dt_slice = slice["dt"]
         ix = slice["particle_idx"]
