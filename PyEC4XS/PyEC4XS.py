@@ -293,35 +293,10 @@ class xEcloud:
             raise ValueError("track cannot clean the slices in slice-by-slice mode!")
 
         if slice_data is None:
-            if not hasattr(particles, "slice_info"):
-                raise ValueError(
-                    "Slice-by-slice mode expects explicit slice metadata. "
-                    "Use track_slice(particles, slice_data) or provide a "
-                    "particle object carrying slice_info for compatibility."
-                )
-
-            if particles.slice_info == "unsliced":
-                return
-
-            if len(particles.x) > 0:
-                beta = float(particles.beta0[0])
-                gamma = float(particles.gamma0[0])
-            else:
-                beta = 0.0
-                gamma = 0.0
-
-            dz = particles.slice_info["z_bin_right"] - particles.slice_info["z_bin_left"]
-            slice_data = {
-                "num_active": len(particles.x),
-                "particle_idx": np.arange(len(particles.x), dtype=int),
-                "beta": beta,
-                "zeta": particles.slice_info["z_bin_center"],
-                "gamma": gamma,
-                "dz": dz,
-                "dt": dz / (beta * c) if beta != 0 else 0.0,
-                "slice_num": f"{particles.slice_info.get('i_slice', 0) + 1}",
-                "slice_info": particles.slice_info,
-            }
+            raise ValueError(
+                "Slice-by-slice mode expects explicit slice metadata. "
+                "Use track_slice(particles, slice_data)"
+            )
 
         if slice_data.get("slice_info") == "unsliced":
             return

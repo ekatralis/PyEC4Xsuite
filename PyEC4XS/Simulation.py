@@ -81,13 +81,32 @@ def _intensity_of_particles(particles):
     return float(np.sum(_weight_array(particles)))
 
 
-def _geom_emittance(coord, mom):
+def _covariance(coord, mom):
     if len(coord) == 0:
         return 0.0
-    c_11 = np.var(coord)
-    c_22 = np.var(mom)
-    c_12 = np.mean((coord - np.mean(coord)) * (mom - np.mean(mom)))
-    value = c_11 * c_22 - c_12 * c_12
+    coord = np.asarray(coord, dtype=float)
+    mom = np.asarray(mom, dtype=float)
+    return float(np.mean((coord - np.mean(coord)) * (mom - np.mean(mom))))
+
+
+def _geom_emittance(coord, mom, dp=None):
+    if len(coord) == 0:
+        return 0.0
+
+    sigma11 = _covariance(coord, coord)
+    sigma12 = _covariance(coord, mom)
+    sigma22 = _covariance(mom, mom)
+
+    if dp is not None and len(dp) == len(coord):
+        cov_dp2 = _covariance(dp, dp)
+        if cov_dp2 != 0.0:
+            cov_u_dp = _covariance(coord, dp)
+            cov_up_dp = _covariance(mom, dp)
+            sigma11 -= cov_u_dp * cov_u_dp / cov_dp2
+            sigma12 -= cov_u_dp * cov_up_dp / cov_dp2
+            sigma22 -= cov_up_dp * cov_up_dp / cov_dp2
+
+    value = sigma11 * sigma22 - sigma12 * sigma12
     return float(np.sqrt(max(value, 0.0)))
 
 
@@ -97,14 +116,150 @@ def _normalized_emittance(particles, plane):
         return 0.0
 
     beta_gamma = float(particles.beta0[active][0] * particles.gamma0[active][0])
+    delta = np.array(particles.delta[active], dtype=float)
     if plane == "x":
-        eps_g = _geom_emittance(np.array(particles.x[active]), np.array(particles.px[active]))
+        eps_g = _geom_emittance(
+            np.array(particles.x[active], dtype=float),
+            np.array(particles.px[active], dtype=float),
+            dp=delta,
+        )
     elif plane == "y":
-        eps_g = _geom_emittance(np.array(particles.y[active]), np.array(particles.py[active]))
+        eps_g = _geom_emittance(
+            np.array(particles.y[active], dtype=float),
+            np.array(particles.py[active], dtype=float),
+            dp=delta,
+        )
     else:
         raise ValueError(f"Invalid plane {plane}")
 
     return eps_g * beta_gamma
+
+
+def _normalized_longitudinal_emittance(particles):
+    active = _active_mask(particles)
+    if not np.any(active):
+        return 0.0
+
+    zeta = np.array(particles.zeta[active], dtype=float)
+    delta = np.array(particles.delta[active], dtype=float)
+    eps_g = _geom_emittance(zeta, delta, dp=None)
+    return float(4.0 * np.pi * eps_g * float(particles.p0c[active][0]) / 299792458.0)
+
+
+def _safe_mean(values):
+    if len(values) == 0:
+        return 0.0
+    return float(np.mean(values))
+
+
+def _safe_std(values):
+    if len(values) == 0:
+        return 0.0
+    return float(np.std(values))
+
+
+def _bunch_stat_value(particles, stat):
+    active = _active_mask(particles)
+    if not np.any(active):
+        return 0.0
+
+    attr_map = {
+        "mean_x": "x",
+        "mean_xp": "px",
+        "mean_y": "y",
+        "mean_yp": "py",
+        "mean_z": "zeta",
+        "mean_dp": "delta",
+        "sigma_x": "x",
+        "sigma_y": "y",
+        "sigma_z": "zeta",
+        "sigma_dp": "delta",
+    }
+
+    if stat in attr_map:
+        values = np.array(getattr(particles, attr_map[stat])[active], dtype=float)
+        if stat.startswith("mean"):
+            return _safe_mean(values)
+        return _safe_std(values)
+
+    if stat == "epsn_x":
+        return _normalized_emittance(particles, "x")
+    if stat == "epsn_y":
+        return _normalized_emittance(particles, "y")
+    if stat == "epsn_z":
+        return _normalized_longitudinal_emittance(particles)
+    if stat == "macroparticlenumber":
+        return float(np.sum(active))
+
+    raise ValueError(f"Unsupported bunch statistic {stat!r}")
+
+
+def _slice_statistics(particles, slicer, slice_stats_to_store):
+    active = _active_mask(particles)
+    n_slices = int(slicer.num_slices)
+    out = {stat: np.zeros(n_slices, dtype=float) for stat in slice_stats_to_store}
+    if not np.any(active):
+        return out
+
+    slice_index = np.array(slicer.get_slice_indices(particles), dtype=int)
+    x = np.array(particles.x, dtype=float)
+    px = np.array(particles.px, dtype=float)
+    y = np.array(particles.y, dtype=float)
+    py = np.array(particles.py, dtype=float)
+    zeta = np.array(particles.zeta, dtype=float)
+    delta = np.array(particles.delta, dtype=float)
+
+    for ii in range(n_slices):
+        mask = active & (slice_index == ii)
+        n_part = int(np.sum(mask))
+        if "n_macroparticles_per_slice" in out:
+            out["n_macroparticles_per_slice"][ii] = float(n_part)
+        if n_part == 0:
+            continue
+
+        if "mean_x" in out:
+            out["mean_x"][ii] = _safe_mean(x[mask])
+        if "mean_xp" in out:
+            out["mean_xp"][ii] = _safe_mean(px[mask])
+        if "mean_y" in out:
+            out["mean_y"][ii] = _safe_mean(y[mask])
+        if "mean_yp" in out:
+            out["mean_yp"][ii] = _safe_mean(py[mask])
+        if "mean_z" in out:
+            out["mean_z"][ii] = _safe_mean(zeta[mask])
+        if "mean_dp" in out:
+            out["mean_dp"][ii] = _safe_mean(delta[mask])
+
+        if "sigma_x" in out:
+            out["sigma_x"][ii] = _safe_std(x[mask])
+        if "sigma_y" in out:
+            out["sigma_y"][ii] = _safe_std(y[mask])
+        if "sigma_z" in out:
+            out["sigma_z"][ii] = _safe_std(zeta[mask])
+        if "sigma_dp" in out:
+            out["sigma_dp"][ii] = _safe_std(delta[mask])
+
+        if n_part > 1:
+            if "epsn_x" in out:
+                out["epsn_x"][ii] = (
+                    _geom_emittance(x[mask], px[mask], dp=delta[mask])
+                    * float(particles.beta0[mask][0] * particles.gamma0[mask][0])
+                )
+            if "epsn_y" in out:
+                out["epsn_y"][ii] = (
+                    _geom_emittance(y[mask], py[mask], dp=delta[mask])
+                    * float(particles.beta0[mask][0] * particles.gamma0[mask][0])
+                )
+            if "epsn_z" in out:
+                out["epsn_z"][ii] = (
+                    4.0
+                    * np.pi
+                    * _geom_emittance(zeta[mask], delta[mask], dp=None)
+                    * float(particles.p0c[mask][0])
+                    / 299792458.0
+                )
+
+    return out
 
 
 @dataclass
@@ -210,17 +365,6 @@ class XsuiteBunchMonitor:
         self._buffer = {stat: [] for stat in self.stats_to_store}
         self._written_turns = 0
 
-        self.monitor = xf.CollectiveMonitor(
-            monitor_bunches=True,
-            monitor_slices=False,
-            monitor_particles=False,
-            base_file_name=None,
-            flush_data_every=1,
-            zeta_range=_slicer_zeta_range(slicer),
-            num_slices=int(slicer.num_slices),
-            stats_to_store=_mapped_xsuite_stats(self.stats_to_store),
-        )
-
         with h5py.File(self.filename, "w") as fid:
             fid.attrs["n_turns_expected"] = int(n_turns)
             for key, value in self.metadata.items():
@@ -235,21 +379,8 @@ class XsuiteBunchMonitor:
                 )
 
     def dump(self, bunch):
-        if not np.any(_active_mask(bunch)):
-            for stat in self.stats_to_store:
-                self._buffer[stat].append(0.0)
-            if len(next(iter(self._buffer.values()))) >= self.write_buffer_every:
-                self.flush()
-            return
-
-        self.monitor.track(bunch)
-        bunch_key = _monitor_bunch_key(self.monitor)
-        bunch_buffer = self.monitor.bunch_buffer[bunch_key]
-
         for stat in self.stats_to_store:
-            xs_stat = PYHT_TO_XSUITE_STAT[stat]
-            value = np.asarray(bunch_buffer[xs_stat], dtype=float)[0]
-            self._buffer[stat].append(value)
+            self._buffer[stat].append(_bunch_stat_value(bunch, stat))
 
         if len(next(iter(self._buffer.values()))) >= self.write_buffer_every:
             self.flush()
@@ -294,20 +425,7 @@ class XsuiteSliceMonitor:
         self._slice_buffer = {stat: [] for stat in self.slice_stats_to_store}
         self._written_turns = 0
         self.n_slices = int(slicer.num_slices)
-
-        requested_stats = _mapped_xsuite_stats(
-            list(self.bunch_stats_to_store) + list(self.slice_stats_to_store)
-        )
-        self.monitor = xf.CollectiveMonitor(
-            monitor_bunches=True,
-            monitor_slices=True,
-            monitor_particles=False,
-            base_file_name=None,
-            flush_data_every=1,
-            zeta_range=_slicer_zeta_range(slicer),
-            num_slices=self.n_slices,
-            stats_to_store=requested_stats,
-        )
+        self.slicer = slicer
 
         with h5py.File(self.filename, "w") as fid:
             fid.attrs["n_turns_expected"] = int(n_turns)
@@ -333,29 +451,12 @@ class XsuiteSliceMonitor:
                 )
 
     def dump(self, bunch):
-        if not np.any(_active_mask(bunch)):
-            for stat in self.bunch_stats_to_store:
-                self._bunch_buffer[stat].append(0.0)
-            for stat in self.slice_stats_to_store:
-                self._slice_buffer[stat].append(np.zeros(self.n_slices, dtype=float))
-            if len(next(iter(self._bunch_buffer.values()))) >= self.write_buffer_every:
-                self.flush()
-            return
-
-        self.monitor.track(bunch)
-        bunch_key = _monitor_bunch_key(self.monitor)
-        bunch_buffer = self.monitor.bunch_buffer[bunch_key]
-        slice_buffer = self.monitor.slice_buffer[bunch_key]
-
         for stat in self.bunch_stats_to_store:
-            xs_stat = PYHT_TO_XSUITE_STAT[stat]
-            value = np.asarray(bunch_buffer[xs_stat], dtype=float)[0]
-            self._bunch_buffer[stat].append(value)
+            self._bunch_buffer[stat].append(_bunch_stat_value(bunch, stat))
 
+        slice_stats = _slice_statistics(bunch, self.slicer, self.slice_stats_to_store)
         for stat in self.slice_stats_to_store:
-            xs_stat = PYHT_TO_XSUITE_STAT[stat]
-            value = np.asarray(slice_buffer[xs_stat], dtype=float)[0]
-            self._slice_buffer[stat].append(value)
+            self._slice_buffer[stat].append(slice_stats[stat])
 
         if len(next(iter(self._bunch_buffer.values()))) >= self.write_buffer_every:
             self.flush()
@@ -968,7 +1069,6 @@ class Simulation:
                     "z_bin_left": z_left,
                     "z_bin_right": z_right,
                     "interact_with_EC": True,
-                    "info_parent_bunch": {"i_bunch": 0},
                 },
             }
             sliced_pieces.append(
