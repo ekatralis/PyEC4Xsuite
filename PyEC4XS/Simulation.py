@@ -19,10 +19,10 @@ from .sim_config_manager import SimConfig
 
 
 def make_pyht_compatible_slicer(n_slices, z_cut):
-    template = xf.TempSlicer(n_slices=n_slices, sigma_z=1.0)
+    template = xf.TempSlicer(n_slices=n_slices, sigma_z=1.0, mode="unibin")
     template_half_range = np.max(np.abs(template.bin_edges))
     sigma_z_equiv = float(z_cut) / float(template_half_range)
-    return xf.TempSlicer(n_slices=n_slices, sigma_z=sigma_z_equiv)
+    return xf.TempSlicer(n_slices=n_slices, sigma_z=sigma_z_equiv, mode="unibin")
 
 
 def _weight_array(particles):
@@ -113,185 +113,274 @@ class SlicePiece:
     slice_data: dict
 
 
-class XsuiteTransverseDamper:
-    def __init__(self, dampingrate_x, dampingrate_y, phase=90.0, local_beta_function=None):
-        self.phase_in_2pi = phase / 360.0 * 2.0 * np.pi
-        self.local_beta_function = local_beta_function
-        self.gain_x = 0.0 if not dampingrate_x else 2.0 / dampingrate_x
-        self.gain_y = 0.0 if not dampingrate_y else 2.0 / dampingrate_y
+PYHEADTAIL_BUNCH_STATS = [
+    "mean_x",
+    "mean_xp",
+    "mean_y",
+    "mean_yp",
+    "mean_z",
+    "mean_dp",
+    "sigma_x",
+    "sigma_y",
+    "sigma_z",
+    "sigma_dp",
+    "epsn_x",
+    "epsn_y",
+    "epsn_z",
+    "macroparticlenumber",
+]
 
-    def track(self, particles):
-        active = _active_mask(particles)
-        if not np.any(active):
-            return
+PYHEADTAIL_SLICE_STATS = [
+    "mean_x",
+    "mean_xp",
+    "mean_y",
+    "mean_yp",
+    "mean_z",
+    "mean_dp",
+    "sigma_x",
+    "sigma_y",
+    "sigma_z",
+    "sigma_dp",
+    "epsn_x",
+    "epsn_y",
+    "epsn_z",
+    "n_macroparticles_per_slice",
+]
 
-        if self.gain_x:
-            mean_px = float(np.mean(particles.px[active]))
-            particles.px[active] -= self.gain_x * np.sin(self.phase_in_2pi) * mean_px
-            if self.local_beta_function:
-                mean_x = float(np.mean(particles.x[active]))
-                particles.px[active] -= (
-                    self.gain_x
-                    * np.cos(self.phase_in_2pi)
-                    * mean_x
-                    / self.local_beta_function
-                )
+PYHT_TO_XSUITE_STAT = {
+    "mean_x": "mean_x",
+    "mean_xp": "mean_px",
+    "mean_y": "mean_y",
+    "mean_yp": "mean_py",
+    "mean_z": "mean_zeta",
+    "mean_dp": "mean_delta",
+    "sigma_x": "sigma_x",
+    "sigma_y": "sigma_y",
+    "sigma_z": "sigma_zeta",
+    "sigma_dp": "sigma_delta",
+    "epsn_x": "epsn_x",
+    "epsn_y": "epsn_y",
+    "epsn_z": "epsn_zeta",
+    "macroparticlenumber": "num_particles",
+    "n_macroparticles_per_slice": "num_particles",
+}
 
-        if self.gain_y:
-            mean_py = float(np.mean(particles.py[active]))
-            particles.py[active] -= self.gain_y * np.sin(self.phase_in_2pi) * mean_py
-            if self.local_beta_function:
-                mean_y = float(np.mean(particles.y[active]))
-                particles.py[active] -= (
-                    self.gain_y
-                    * np.cos(self.phase_in_2pi)
-                    * mean_y
-                    / self.local_beta_function
-                )
+
+def _slicer_zeta_range(slicer):
+    if hasattr(slicer, "bin_edges"):
+        edges = np.array(slicer.bin_edges, dtype=float)
+        return float(np.min(edges)), float(np.max(edges))
+    if hasattr(slicer, "zeta_range"):
+        zeta_range = np.array(slicer.zeta_range, dtype=float)
+        return float(np.min(zeta_range)), float(np.max(zeta_range))
+    raise ValueError("Cannot infer zeta_range from slicer")
+
+
+def _mapped_xsuite_stats(pyht_stats):
+    mapped = []
+    for stat in pyht_stats:
+        if stat not in PYHT_TO_XSUITE_STAT:
+            raise ValueError(f"Unsupported monitor statistic {stat!r}")
+        xs_stat = PYHT_TO_XSUITE_STAT[stat]
+        if xs_stat not in mapped:
+            mapped.append(xs_stat)
+    return mapped
+
+
+def _monitor_bunch_key(monitor):
+    if monitor.slicer is None or monitor.slicer.bunch_selection is None:
+        return 0
+    return int(np.atleast_1d(monitor.slicer.bunch_selection)[0])
 
 
 class XsuiteBunchMonitor:
-    def __init__(self, filename, n_turns, metadata=None, write_buffer_every=3):
+    def __init__(
+        self,
+        filename,
+        n_turns,
+        slicer,
+        metadata=None,
+        write_buffer_every=3,
+        stats_to_store=None,
+    ):
         self.filename = f"{filename}.h5"
         self.metadata = metadata or {}
-        self.write_buffer_every = write_buffer_every
-        self._buffer = []
-        self._initialized = False
+        self.write_buffer_every = int(write_buffer_every)
+        self.stats_to_store = list(stats_to_store or PYHEADTAIL_BUNCH_STATS)
+        self._buffer = {stat: [] for stat in self.stats_to_store}
+        self._written_turns = 0
+
+        self.monitor = xf.CollectiveMonitor(
+            monitor_bunches=True,
+            monitor_slices=False,
+            monitor_particles=False,
+            base_file_name=None,
+            flush_data_every=1,
+            zeta_range=_slicer_zeta_range(slicer),
+            num_slices=int(slicer.num_slices),
+            stats_to_store=_mapped_xsuite_stats(self.stats_to_store),
+        )
 
         with h5py.File(self.filename, "w") as fid:
             fid.attrs["n_turns_expected"] = int(n_turns)
             for key, value in self.metadata.items():
                 fid.attrs[key] = str(value)
+            grp = fid.create_group("Bunch")
+            for stat in sorted(self.stats_to_store):
+                grp.create_dataset(
+                    stat,
+                    shape=(int(n_turns),),
+                    compression="gzip",
+                    compression_opts=9,
+                )
 
     def dump(self, bunch):
-        active = _active_mask(bunch)
-        if np.any(active):
-            record = {
-                "mean_x": float(np.mean(bunch.x[active])),
-                "mean_px": float(np.mean(bunch.px[active])),
-                "mean_y": float(np.mean(bunch.y[active])),
-                "mean_py": float(np.mean(bunch.py[active])),
-                "mean_zeta": float(np.mean(bunch.zeta[active])),
-                "mean_delta": float(np.mean(bunch.delta[active])),
-                "sigma_x": float(np.std(bunch.x[active])),
-                "sigma_y": float(np.std(bunch.y[active])),
-                "sigma_zeta": float(np.std(bunch.zeta[active])),
-                "sigma_delta": float(np.std(bunch.delta[active])),
-                "epsn_x": _normalized_emittance(bunch, "x"),
-                "epsn_y": _normalized_emittance(bunch, "y"),
-                "n_macroparticles": int(np.sum(active)),
-                "intensity": float(np.sum(_weight_array(bunch)[active])),
-            }
-        else:
-            record = {
-                "mean_x": 0.0,
-                "mean_px": 0.0,
-                "mean_y": 0.0,
-                "mean_py": 0.0,
-                "mean_zeta": 0.0,
-                "mean_delta": 0.0,
-                "sigma_x": 0.0,
-                "sigma_y": 0.0,
-                "sigma_zeta": 0.0,
-                "sigma_delta": 0.0,
-                "epsn_x": 0.0,
-                "epsn_y": 0.0,
-                "n_macroparticles": 0,
-                "intensity": 0.0,
-            }
+        if not np.any(_active_mask(bunch)):
+            for stat in self.stats_to_store:
+                self._buffer[stat].append(0.0)
+            if len(next(iter(self._buffer.values()))) >= self.write_buffer_every:
+                self.flush()
+            return
 
-        self._buffer.append(record)
-        if len(self._buffer) >= self.write_buffer_every:
+        self.monitor.track(bunch)
+        bunch_key = _monitor_bunch_key(self.monitor)
+        bunch_buffer = self.monitor.bunch_buffer[bunch_key]
+
+        for stat in self.stats_to_store:
+            xs_stat = PYHT_TO_XSUITE_STAT[stat]
+            value = np.asarray(bunch_buffer[xs_stat], dtype=float)[0]
+            self._buffer[stat].append(value)
+
+        if len(next(iter(self._buffer.values()))) >= self.write_buffer_every:
             self.flush()
 
     def flush(self):
-        if not self._buffer:
+        if not self._buffer or len(next(iter(self._buffer.values()))) == 0:
             return
 
-        keys = list(self._buffer[0].keys())
-        with h5py.File(self.filename, "a") as fid:
-            for key in keys:
-                data = np.array([row[key] for row in self._buffer])
-                if key not in fid:
-                    fid.create_dataset(key, data=data, maxshape=(None,))
-                else:
-                    dset = fid[key]
-                    old_size = dset.shape[0]
-                    dset.resize(old_size + len(data), axis=0)
-                    dset[old_size:] = data
+        n_entries = len(next(iter(self._buffer.values())))
+        start = self._written_turns
+        stop = start + n_entries
 
-        self._buffer = []
+        with h5py.File(self.filename, "a") as fid:
+            grp = fid["Bunch"]
+            for stat in self.stats_to_store:
+                grp[stat][start:stop] = np.array(self._buffer[stat], dtype=float)
+
+        self._written_turns = stop
+        self._buffer = {stat: [] for stat in self.stats_to_store}
 
     def close(self):
         self.flush()
 
 
 class XsuiteSliceMonitor:
-    def __init__(self, filename, n_turns, slicer, metadata=None, write_buffer_every=3):
+    def __init__(
+        self,
+        filename,
+        n_turns,
+        slicer,
+        metadata=None,
+        write_buffer_every=3,
+        bunch_stats_to_store=None,
+        slice_stats_to_store=None,
+    ):
         self.filename = f"{filename}.h5"
         self.metadata = metadata or {}
-        self.write_buffer_every = write_buffer_every
-        self.slicer = slicer
-        self._buffer = []
+        self.write_buffer_every = int(write_buffer_every)
+        self.bunch_stats_to_store = list(bunch_stats_to_store or PYHEADTAIL_BUNCH_STATS)
+        self.slice_stats_to_store = list(slice_stats_to_store or PYHEADTAIL_SLICE_STATS)
+        self._bunch_buffer = {stat: [] for stat in self.bunch_stats_to_store}
+        self._slice_buffer = {stat: [] for stat in self.slice_stats_to_store}
+        self._written_turns = 0
+        self.n_slices = int(slicer.num_slices)
+
+        requested_stats = _mapped_xsuite_stats(
+            list(self.bunch_stats_to_store) + list(self.slice_stats_to_store)
+        )
+        self.monitor = xf.CollectiveMonitor(
+            monitor_bunches=True,
+            monitor_slices=True,
+            monitor_particles=False,
+            base_file_name=None,
+            flush_data_every=1,
+            zeta_range=_slicer_zeta_range(slicer),
+            num_slices=self.n_slices,
+            stats_to_store=requested_stats,
+        )
 
         with h5py.File(self.filename, "w") as fid:
             fid.attrs["n_turns_expected"] = int(n_turns)
-            fid.attrs["n_slices"] = int(slicer.num_slices)
-            fid["slice_centers"] = np.array(slicer.bin_centers)
             for key, value in self.metadata.items():
                 fid.attrs[key] = str(value)
 
+            grp_bunch = fid.create_group("Bunch")
+            for stat in self.bunch_stats_to_store:
+                grp_bunch.create_dataset(
+                    stat,
+                    shape=(int(n_turns),),
+                    compression="gzip",
+                    compression_opts=9,
+                )
+
+            grp_slice = fid.create_group("Slices")
+            for stat in self.slice_stats_to_store:
+                grp_slice.create_dataset(
+                    stat,
+                    shape=(self.n_slices, int(n_turns)),
+                    compression="gzip",
+                    compression_opts=9,
+                )
+
     def dump(self, bunch):
-        iterable = IterableSlices(particles=bunch, slicer=self.slicer)
+        if not np.any(_active_mask(bunch)):
+            for stat in self.bunch_stats_to_store:
+                self._bunch_buffer[stat].append(0.0)
+            for stat in self.slice_stats_to_store:
+                self._slice_buffer[stat].append(np.zeros(self.n_slices, dtype=float))
+            if len(next(iter(self._bunch_buffer.values()))) >= self.write_buffer_every:
+                self.flush()
+            return
 
-        record = {
-            "n_macroparticles": [],
-            "intensity": [],
-            "mean_x": [],
-            "mean_y": [],
-            "mean_px": [],
-            "mean_py": [],
-        }
+        self.monitor.track(bunch)
+        bunch_key = _monitor_bunch_key(self.monitor)
+        bunch_buffer = self.monitor.bunch_buffer[bunch_key]
+        slice_buffer = self.monitor.slice_buffer[bunch_key]
 
-        weights = _weight_array(bunch)
-        for slice_data in iterable:
-            idx = np.array(slice_data["particle_idx"], dtype=int)
-            if len(idx) > 0:
-                record["n_macroparticles"].append(float(len(idx)))
-                record["intensity"].append(float(np.sum(weights[idx])))
-                record["mean_x"].append(float(np.mean(bunch.x[idx])))
-                record["mean_y"].append(float(np.mean(bunch.y[idx])))
-                record["mean_px"].append(float(np.mean(bunch.px[idx])))
-                record["mean_py"].append(float(np.mean(bunch.py[idx])))
-            else:
-                for key in record:
-                    record[key].append(0.0)
+        for stat in self.bunch_stats_to_store:
+            xs_stat = PYHT_TO_XSUITE_STAT[stat]
+            value = np.asarray(bunch_buffer[xs_stat], dtype=float)[0]
+            self._bunch_buffer[stat].append(value)
 
-        self._buffer.append({kk: np.array(vv, dtype=float) for kk, vv in record.items()})
-        if len(self._buffer) >= self.write_buffer_every:
+        for stat in self.slice_stats_to_store:
+            xs_stat = PYHT_TO_XSUITE_STAT[stat]
+            value = np.asarray(slice_buffer[xs_stat], dtype=float)[0]
+            self._slice_buffer[stat].append(value)
+
+        if len(next(iter(self._bunch_buffer.values()))) >= self.write_buffer_every:
             self.flush()
 
     def flush(self):
-        if not self._buffer:
+        if not self._bunch_buffer or len(next(iter(self._bunch_buffer.values()))) == 0:
             return
 
-        keys = list(self._buffer[0].keys())
-        with h5py.File(self.filename, "a") as fid:
-            for key in keys:
-                data = np.stack([row[key] for row in self._buffer], axis=0)
-                if key not in fid:
-                    fid.create_dataset(
-                        key,
-                        data=data,
-                        maxshape=(None, data.shape[1]),
-                    )
-                else:
-                    dset = fid[key]
-                    old_size = dset.shape[0]
-                    dset.resize(old_size + data.shape[0], axis=0)
-                    dset[old_size:] = data
+        n_entries = len(next(iter(self._bunch_buffer.values())))
+        start = self._written_turns
+        stop = start + n_entries
 
-        self._buffer = []
+        with h5py.File(self.filename, "a") as fid:
+            grp_bunch = fid["Bunch"]
+            grp_slice = fid["Slices"]
+            for stat in self.bunch_stats_to_store:
+                grp_bunch[stat][start:stop] = np.array(self._bunch_buffer[stat], dtype=float)
+            for stat in self.slice_stats_to_store:
+                grp_slice[stat][:, start:stop] = np.stack(
+                    self._slice_buffer[stat], axis=1
+                )
+
+        self._written_turns = stop
+        self._bunch_buffer = {stat: [] for stat in self.bunch_stats_to_store}
+        self._slice_buffer = {stat: [] for stat in self.slice_stats_to_store}
 
     def close(self):
         self.flush()
@@ -643,9 +732,13 @@ class Simulation:
         pp = self.pp
 
         if pp.enable_transverse_damper:
-            damper = XsuiteTransverseDamper(
-                dampingrate_x=pp.dampingrate_x,
-                dampingrate_y=pp.dampingrate_y,
+            gain_x = 0.0 if not pp.dampingrate_x else 2.0 / pp.dampingrate_x
+            gain_y = 0.0 if not pp.dampingrate_y else 2.0 / pp.dampingrate_y
+            damper = xf.TransverseDamper(
+                gain_x=gain_x,
+                gain_y=gain_y,
+                zeta_range=(-float(pp.z_cut), float(pp.z_cut)),
+                num_slices=int(pp.n_slices),
             )
             self.machine.one_turn_map.append(damper)
             self.n_non_parallelizable += 1
@@ -774,12 +867,16 @@ class Simulation:
     def _prepare_monitors(self):
         pp = self.pp
         write_buffer_every = getattr(pp, "write_buffer_every", 3)
+        bunch_stats_to_store = getattr(pp, "bunch_stats_to_store", PYHEADTAIL_BUNCH_STATS)
+        slice_stats_to_store = getattr(pp, "slice_stats_to_store", PYHEADTAIL_SLICE_STATS)
 
         self.bunch_monitor = XsuiteBunchMonitor(
             "bunch_evolution_%02d" % self.SimSt.present_simulation_part,
             pp.N_turns,
+            self.slicer,
             {"Comment": "PyEC4XS/Xsuite simulation"},
             write_buffer_every=write_buffer_every,
+            stats_to_store=bunch_stats_to_store,
         )
 
         self.slice_monitor = XsuiteSliceMonitor(
@@ -788,6 +885,8 @@ class Simulation:
             self.slicer,
             {"Comment": "PyEC4XS/Xsuite simulation"},
             write_buffer_every=write_buffer_every,
+            bunch_stats_to_store=bunch_stats_to_store,
+            slice_stats_to_store=slice_stats_to_store,
         )
 
     def _setup_multijob_mode(self):
