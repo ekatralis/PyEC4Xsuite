@@ -4,7 +4,6 @@ import xobjects as xo
 from typing import Literal
 from PyECLOUD import buildup_simulation as bsim
 import numpy as np
-import matplotlib.pyplot as plt
 from scipy.constants import c
 import time
 from . import myfilemanager as mfm
@@ -12,9 +11,19 @@ from scipy.constants import e as qe
 
 class IterableSlices:
 
-    def __init__(self, particles: xt.Particles, slicer: xf.TempSlicer,
-                 iter_mode = "Default"):
+    def __init__(
+        self,
+        particles: xt.Particles,
+        slicer: xf.TempSlicer,
+        iter_mode="Default",
+    ):
         assert iter_mode in ["Default", "Reverse"]
+        if slicer is None:
+            raise ValueError(
+                "IterableSlices requires a slicer. Slice-by-slice mode should "
+                "pass pre-sliced particle objects carrying slice_info."
+            )
+
         self.slicer = slicer
         self.n_slices = slicer.num_slices
         self.slice_particle_list = []
@@ -107,17 +116,43 @@ class Empty():
 class xEcloud:
     needs_cpu = True
     iscollective = True
+
+    def generate_twin_ecloud_with_shared_space_charge(self):
+        if hasattr(self, "efieldmap"):
+            raise ValueError(
+                "Ecloud has been replaced with field map. I cannot generate a twin ecloud!"
+            )
+
+        return xEcloud(
+            L_ecloud=self.L_ecloud,
+            slicer=self.slicer,
+            Dt_ref=self.Dt_ref,
+            pyecl_input_folder=self.pyecl_input_folder,
+            flag_clean_slices=self.flag_clean_slices,
+            slice_by_slice_mode=self.slice_by_slice_mode,
+            space_charge_obj=self.spacech_ele,
+            kick_mode_for_beam_field=self.kick_mode_for_beam_field,
+            beam_monitor=self.beam_monitor,
+            verbose=self.verbose,
+            save_pyecl_outp_as=self.save_pyecl_outp_as,
+            enable_diagnostics=self.enable_diagnostics,
+            force_interp_at_substeps_interacting_slices=self.force_interp_at_substeps_interacting_slices,
+            **self.kwargs,
+        )
+
     def __init__(self,
                  L_ecloud,
                  slicer,
                  Dt_ref,
                  pyecl_input_folder="./",
                  flag_clean_slices = False,
+                 slice_by_slice_mode = False,
                  space_charge_obj = None,
+                 kick_mode_for_beam_field=False,
+                 beam_monitor=None,
                  verbose = False,
                  save_pyecl_outp_as = None,
                  enable_diagnostics = False,
-                 kick_mode_for_beam_field=False,
                  force_interp_at_substeps_interacting_slices=False,
                  **kwargs
                 ):
@@ -126,8 +161,11 @@ class xEcloud:
         self.L_ecloud = L_ecloud
         self.verbose = verbose
         self.flag_clean_slices = flag_clean_slices
+        self.pyecl_input_folder = pyecl_input_folder
         self.kwargs = kwargs
         self.enable_diagnostics = enable_diagnostics
+        self.save_pyecl_outp_as = save_pyecl_outp_as
+        self.slice_by_slice_mode = slice_by_slice_mode
 
         # Initialize E-Cloud
         self.cloudsim = bsim.BuildupSimulation(
@@ -172,6 +210,12 @@ class xEcloud:
         ]
 
         self.beam_PyPIC_state = self.cloudsim.spacech_ele.PyPICobj.get_state_object()
+        self.spacech_ele = self.cloudsim.spacech_ele
+
+        if self.slice_by_slice_mode:
+            assert self.slicer is None
+            self.track = self._track_in_single_slice_mode
+            self.finalize_and_reinitialize = self._finalize_and_reinitialize
         
         if self.enable_diagnostics:
             self._print("Diagnostics enabled")
@@ -182,12 +226,28 @@ class xEcloud:
         self._print(f"Iterable Mode for slices is set to '{self.slices_iter_mode}'")
         self.track_only_first_time = False
         self.kick_mode_for_beam_field = kick_mode_for_beam_field
+        self.beam_monitor = beam_monitor
         self.force_interp_at_substeps_interacting_slices = force_interp_at_substeps_interacting_slices
 
         self.N_tracks = 0
         self.i_reinit = 0
         self.t_sim = 0.0
         self.i_curr_bunch = -1
+
+    def track_slice(self, particles: xt.Particles, slice_data: dict, force_pyecl_newpass: bool = False):
+        if self.slice_by_slice_mode:
+            self._track_in_single_slice_mode(
+                particles,
+                slice_data=slice_data,
+                force_pyecl_newpass=force_pyecl_newpass,
+            )
+            return
+
+        self._track_single_slice(
+            particles=particles,
+            slice=slice_data,
+            force_pyecl_newpass=force_pyecl_newpass,
+        )
 
     def track(self, particles: xt.Particles):
         if self.track_only_first_time:
@@ -212,6 +272,9 @@ class xEcloud:
             if force_newpass:
                 force_newpass = False
 
+        if self.beam_monitor is not None:
+            self.beam_monitor.dump(particles)
+
         self._finalize()
 
         if self.verbose:
@@ -219,6 +282,55 @@ class xEcloud:
             self._print("Done track %d in %.3f s" % (self.N_tracks, stop_time - start_time))
 
         self.N_tracks += 1
+
+    def _track_in_single_slice_mode(
+        self,
+        particles: xt.Particles,
+        slice_data: dict | None = None,
+        force_pyecl_newpass: bool = False,
+    ):
+        if self.flag_clean_slices:
+            raise ValueError("track cannot clean the slices in slice-by-slice mode!")
+
+        if slice_data is None:
+            if not hasattr(particles, "slice_info"):
+                raise ValueError(
+                    "Slice-by-slice mode expects explicit slice metadata. "
+                    "Use track_slice(particles, slice_data) or provide a "
+                    "particle object carrying slice_info for compatibility."
+                )
+
+            if particles.slice_info == "unsliced":
+                return
+
+            if len(particles.x) > 0:
+                beta = float(particles.beta0[0])
+                gamma = float(particles.gamma0[0])
+            else:
+                beta = 0.0
+                gamma = 0.0
+
+            dz = particles.slice_info["z_bin_right"] - particles.slice_info["z_bin_left"]
+            slice_data = {
+                "num_active": len(particles.x),
+                "particle_idx": np.arange(len(particles.x), dtype=int),
+                "beta": beta,
+                "zeta": particles.slice_info["z_bin_center"],
+                "gamma": gamma,
+                "dz": dz,
+                "dt": dz / (beta * c) if beta != 0 else 0.0,
+                "slice_num": f"{particles.slice_info.get('i_slice', 0) + 1}",
+                "slice_info": particles.slice_info,
+            }
+
+        if slice_data.get("slice_info") == "unsliced":
+            return
+
+        self._track_single_slice(
+            particles=particles,
+            slice=slice_data,
+            force_pyecl_newpass=force_pyecl_newpass,
+        )
 
     def _track_single_slice(self, particles: xt.Particles, slice: dict, force_pyecl_newpass: bool = False):
         spacech_ele = self.cloudsim.spacech_ele
@@ -452,11 +564,26 @@ class xEcloud:
     def _finalize(self):
         if self.enable_diagnostics:
             self._diagnostics_finalize()
-    
-    def finalize_and_reinitialize(self):
+
+    def _finalize_and_reinitialize(self):
         self._print("Exec. finalize and reinitialize")
         self._finalize()
         self._reinitialize()
+
+    def finalize_and_reinitialize(self):
+        self._finalize_and_reinitialize()
+
+    def replace_with_recorded_field_map(self, delete_ecloud_data=True):
+        raise NotImplementedError(
+            "Frozen-field map replacement is not yet implemented for PyEC4XS."
+        )
+
+    def track_once_and_replace_with_recorded_field_map(
+        self, bunch, delete_ecloud_data=True
+    ):
+        raise NotImplementedError(
+            "Frozen-field map replacement is not yet implemented for PyEC4XS."
+        )
 
     def _diagnostics_init(self):
         self.save_ele_field_probes = False
@@ -642,3 +769,7 @@ class xEcloud:
 
     def _print(self, *values, sep=' ', end='\n', file=None, flush=False):
         print("[PyEC4XS]", *values, sep=sep, end=end, file=file, flush=flush)
+
+    def remove_savers(self):
+        for thiscloud in self.cloudsim.cloud_list:
+            thiscloud.pyeclsaver = None
