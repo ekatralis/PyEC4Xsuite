@@ -1,14 +1,11 @@
 import importlib
-import importlib.util
 import json
 import os
-import pickle
 import shutil
 import sys
 import tempfile
 from pathlib import Path
 
-import h5py
 import numpy as np
 
 _mpl_dir = Path(tempfile.gettempdir()) / "pyec4xs_mpl"
@@ -30,13 +27,11 @@ if str(REPO_ROOT) not in sys.path:
 from PyEC4XS import myfilemanager as mfm
 
 
-OUTPUT_DIR = SCRIPT_DIR / "comparison_against_pyparis_sim_class"
+OUTPUT_DIR = SCRIPT_DIR / "comparison_against_pyparis_sim_class_independent_init"
 
 RUN_ARTIFACTS = [
     "bunch_evolution_00.h5",
     "bunch_status_part00.h5",
-    "initial_bunch_pyec4xs.h5",
-    "initial_bunch_pyparis.h5",
     "multigrid_config_dip.pkl",
     "multigrid_config_dip.txt",
     "pyparislog.txt",
@@ -54,7 +49,7 @@ def _prepare_run_dir(path):
             target.unlink()
 
 
-def _write_param_file(target_dir, bunch_from_file=None):
+def _write_param_file(target_dir):
     template = (SCRIPT_DIR / "Simulation_parameters.py").read_text(encoding="utf-8")
     template = template.replace(
         '"!folder_of_this_file!/../../../../PyPARIS_example/LHC_chm_ver.mat"',
@@ -64,126 +59,12 @@ def _write_param_file(target_dir, bunch_from_file=None):
         '"!folder_of_this_file!/../../../../PyPARIS_example/pyecloud_config"',
         repr(str((REPO_ROOT / "PyPARIS_example" / "pyecloud_config").resolve())),
     )
-    if bunch_from_file is not None:
-        template = template.replace(
-            "bunch_from_file = None",
-            f"bunch_from_file = {repr(str(Path(bunch_from_file).resolve()))}",
-        )
     (target_dir / "Simulation_parameters.py").write_text(template, encoding="utf-8")
 
 
-def _load_param_module(param_file):
-    spec = importlib.util.spec_from_file_location("comparison_params", param_file)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def _load_optics(pp):
-    optics_pickle = getattr(pp, "optics_pickle_file", None)
-    if optics_pickle is None:
-        return None
-    with open(optics_pickle, "rb") as fid:
-        return pickle.load(fid)
-
-
-def _build_shared_initial_bunch(pyht_dir, xsuite_dir):
-    from PyEC4XS.LHC_custom import LHC as XsuiteLHC
-    from PyEC4XS.Simulation import _pickle_to_float_buffer
-    from PyPARIS.communication_helpers import beam_2_buffer
-    from PyPARIS_sim_class.LHC_custom import LHC as PyHTLHC
-    import xpart as xp
-
-    pp = _load_param_module(pyht_dir / "Simulation_parameters.py")
-    optics = _load_optics(pp)
-
-    np.random.seed(12345)
-    pyht_machine = PyHTLHC(
-        n_segments=pp.n_segments,
-        machine_configuration=pp.machine_configuration,
-        beta_x=pp.beta_x,
-        beta_y=pp.beta_y,
-        accQ_x=pp.Q_x,
-        accQ_y=pp.Q_y,
-        Qp_x=pp.Qp_x,
-        Qp_y=pp.Qp_y,
-        octupole_knob=pp.octupole_knob,
-        optics_dict=optics,
-        V_RF=pp.V_RF,
-        longitudinal_mode=getattr(pp, "longitudinal_mode", "non-linear"),
-    )
-
-    bunch = pyht_machine.generate_6D_Gaussian_bunch_matched(
-        n_macroparticles=pp.n_macroparticles,
-        intensity=pp.intensity,
-        epsn_x=pp.epsn_x,
-        epsn_y=pp.epsn_y,
-        sigma_z=pp.sigma_z,
-    )
-
-    inj_opt = pyht_machine.transverse_map.get_injection_optics()
-    sigma_x = np.sqrt(inj_opt["beta_x"] * pp.epsn_x / pyht_machine.betagamma)
-    sigma_y = np.sqrt(inj_opt["beta_y"] * pp.epsn_y / pyht_machine.betagamma)
-    bunch.x += pp.x_kick_in_sigmas * sigma_x
-    bunch.y += pp.y_kick_in_sigmas * sigma_y
-
-    pyht_bunch_file = pyht_dir / "initial_bunch_pyparis.h5"
-    with h5py.File(pyht_bunch_file, "w") as fid:
-        fid["bunch"] = beam_2_buffer(bunch)
-
-    xs_machine = XsuiteLHC(
-        n_segments=pp.n_segments,
-        machine_configuration=pp.machine_configuration,
-        beta_x=pp.beta_x,
-        beta_y=pp.beta_y,
-        accQ_x=pp.Q_x,
-        accQ_y=pp.Q_y,
-        Qp_x=pp.Qp_x,
-        Qp_y=pp.Qp_y,
-        octupole_knob=pp.octupole_knob,
-        optics_dict=optics,
-        V_RF=pp.V_RF,
-        longitudinal_mode=getattr(pp, "longitudinal_mode", "non-linear"),
-    )
-
-    n_part = int(bunch.macroparticlenumber)
-    particles = xp.Particles(
-        p0c=float(xs_machine.particle_ref.p0c[0]),
-        mass0=float(xs_machine.particle_ref.mass0),
-        q0=float(xs_machine.particle_ref.q0),
-        x=np.array(bunch.x, copy=True),
-        px=np.array(bunch.xp, copy=True),
-        y=np.array(bunch.y, copy=True),
-        py=np.array(bunch.yp, copy=True),
-        zeta=np.array(bunch.z, copy=True),
-        delta=np.array(bunch.dp, copy=True),
-        particle_id=np.arange(n_part, dtype=np.int64),
-        state=np.ones(n_part, dtype=np.int64),
-        weight=np.full(n_part, float(bunch.particlenumber_per_mp), dtype=np.float64),
-    )
-    payload = {
-        "kind": "particles",
-        "particles": particles.to_dict(
-            copy_to_cpu=True,
-            remove_redundant_variables=True,
-            remove_unused_space=False,
-        ),
-    }
-    xsuite_bunch_file = xsuite_dir / "initial_bunch_pyec4xs.h5"
-    with h5py.File(xsuite_bunch_file, "w") as fid:
-        fid["bunch"] = _pickle_to_float_buffer(payload)
-
-    return {
-        "pyparis": pyht_bunch_file,
-        "pyec4xs": xsuite_bunch_file,
-    }
-
-
-def _run_pyec4xs(run_dir, prepare=True, write_params=True):
-    if prepare:
-        _prepare_run_dir(run_dir)
-    if write_params:
-        _write_param_file(run_dir)
+def _run_pyec4xs(run_dir):
+    _prepare_run_dir(run_dir)
+    _write_param_file(run_dir)
     module = importlib.import_module("PyEC4XS.Simulation")
     previous_cwd = Path.cwd()
     try:
@@ -194,11 +75,9 @@ def _run_pyec4xs(run_dir, prepare=True, write_params=True):
         os.chdir(previous_cwd)
 
 
-def _run_pyparis_sim_class(run_dir, prepare=True, write_params=True):
-    if prepare:
-        _prepare_run_dir(run_dir)
-    if write_params:
-        _write_param_file(run_dir)
+def _run_pyparis_sim_class(run_dir):
+    _prepare_run_dir(run_dir)
+    _write_param_file(run_dir)
     module = importlib.import_module("PyPARIS_sim_class.Simulation")
     previous_cwd = Path.cwd()
     try:
@@ -233,19 +112,19 @@ def _plot_monitors(pyht_bunch, xsuite_bunch, pyht_slices, xsuite_slices):
     axes[0, 1].grid(True)
     axes[0, 1].legend(loc="best")
 
-    axes[1, 0].plot(turns, pyht_bunch.mean_z, ".-", color="tab:blue", label="PyPARIS_sim_class")
-    axes[1, 0].plot(turns, xsuite_bunch.mean_z, ".-", color="tab:orange", label="PyEC4XS")
-    axes[1, 0].set_title("mean_z")
-    axes[1, 0].set_xlabel("Turn")
-    axes[1, 0].grid(True)
-    axes[1, 0].legend(loc="best")
-
     axes[0, 2].plot(turns, pyht_bunch.mean_dp, ".-", color="tab:blue", label="PyPARIS_sim_class")
     axes[0, 2].plot(turns, xsuite_bunch.mean_dp, ".-", color="tab:orange", label="PyEC4XS")
     axes[0, 2].set_title("mean_dp")
     axes[0, 2].set_xlabel("Turn")
     axes[0, 2].grid(True)
     axes[0, 2].legend(loc="best")
+
+    axes[1, 0].plot(turns, pyht_bunch.mean_z, ".-", color="tab:blue", label="PyPARIS_sim_class")
+    axes[1, 0].plot(turns, xsuite_bunch.mean_z, ".-", color="tab:orange", label="PyEC4XS")
+    axes[1, 0].set_title("mean_z")
+    axes[1, 0].set_xlabel("Turn")
+    axes[1, 0].grid(True)
+    axes[1, 0].legend(loc="best")
 
     axes[1, 1].plot(turns, pyht_bunch.sigma_z, ".-", color="tab:blue", label="PyPARIS_sim_class")
     axes[1, 1].plot(turns, xsuite_bunch.sigma_z, ".-", color="tab:orange", label="PyEC4XS")
@@ -264,7 +143,7 @@ def _plot_monitors(pyht_bunch, xsuite_bunch, pyht_slices, xsuite_slices):
     axes[1, 2].legend(loc="best")
 
     fig.tight_layout()
-    out_path = OUTPUT_DIR / "pyec4xs_vs_pyparis_sim_class.png"
+    out_path = OUTPUT_DIR / "pyec4xs_vs_pyparis_sim_class_independent_init.png"
     fig.savefig(out_path, dpi=180)
     plt.close(fig)
     return out_path
@@ -278,17 +157,8 @@ def main():
     pyht_dir = OUTPUT_DIR / "pyparis_sim_class"
     xsuite_dir = OUTPUT_DIR / "pyec4xs"
 
-    _prepare_run_dir(pyht_dir)
-    _prepare_run_dir(xsuite_dir)
-    _write_param_file(pyht_dir)
-    _write_param_file(xsuite_dir)
-
-    bunch_files = _build_shared_initial_bunch(pyht_dir, xsuite_dir)
-    _write_param_file(pyht_dir, bunch_from_file=bunch_files["pyparis"])
-    _write_param_file(xsuite_dir, bunch_from_file=bunch_files["pyec4xs"])
-
-    _run_pyparis_sim_class(pyht_dir, prepare=False, write_params=False)
-    _run_pyec4xs(xsuite_dir, prepare=False, write_params=False)
+    _run_pyparis_sim_class(pyht_dir)
+    _run_pyec4xs(xsuite_dir)
 
     pyht_bunch, pyht_slices = _load_monitors(pyht_dir)
     xsuite_bunch, xsuite_slices = _load_monitors(xsuite_dir)
@@ -297,7 +167,7 @@ def main():
 
     summary = {
         "plot": str(plot_path),
-        "shared_initial_bunch": True,
+        "shared_initial_bunch": False,
         "mean_dp_max_abs_diff": float(np.max(np.abs(pyht_bunch.mean_dp - xsuite_bunch.mean_dp))),
         "mean_x_max_abs_diff": float(np.max(np.abs(pyht_bunch.mean_x - xsuite_bunch.mean_x))),
         "mean_y_max_abs_diff": float(np.max(np.abs(pyht_bunch.mean_y - xsuite_bunch.mean_y))),

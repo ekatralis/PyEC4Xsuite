@@ -14,13 +14,13 @@ Qp_x = 0.0
 Qp_y = 0.0
 octupole_knob = 0.0
 V_RF = 12e6
-longitudinal_mode = "linear"
+longitudinal_mode = "non-linear"
 
 enable_transverse_damper = False
 dampingrate_x = 50.0
 dampingrate_y = 100.0
 
-bunch_from_file = None
+bunch_from_file = '/Users/vkatralis/Documents/CERN/git/Xsuite_Integration/tests/examples_PyEC4XS/examples_from_PyPARIS_sim_class/001a_simulation_with_eclouds_LHC/comparison_against_pyparis_sim_class/pyec4xs/initial_bunch_pyec4xs.h5'
 intensity = 1.2e11
 epsn_x = 2.5e-6
 epsn_y = 2.5e-6
@@ -34,7 +34,7 @@ macroparticles_per_slice = 500
 n_macroparticles = macroparticles_per_slice * n_slices
 write_buffer_every = 1
 
-N_turns = 128
+N_turns = 256
 N_turns_target = 128
 sim_stop_frac = 0.9
 flag_check_emittance_growth = False

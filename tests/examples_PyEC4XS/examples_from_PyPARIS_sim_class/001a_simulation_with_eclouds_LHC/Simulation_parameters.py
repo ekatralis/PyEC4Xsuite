@@ -14,7 +14,7 @@ Qp_x = 0.0
 Qp_y = 0.0
 octupole_knob = 0.0
 V_RF = 12e6
-longitudinal_mode = "linear"
+longitudinal_mode = "non-linear"
 
 enable_transverse_damper = False
 dampingrate_x = 50.0
