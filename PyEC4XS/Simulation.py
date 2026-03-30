@@ -59,6 +59,29 @@ def _filter_particles_or_empty(particles, mask, particle_ref):
     return _empty_particles_from_reference(particle_ref)
 
 
+def _concat_particle_partitions(particle_list, particle_ref):
+    if not particle_list:
+        return _empty_particles_from_reference(particle_ref)
+
+    cls = xp.Particles
+    capacity = int(np.sum([pp._capacity for pp in particle_list]))
+    merged = cls(_capacity=capacity, _context=xo.ContextCpu())
+
+    for tt, nn in cls.scalar_vars:
+        setattr(merged, nn, getattr(particle_list[0], nn))
+
+    first = 0
+    with merged._bypass_linked_vars():
+        for part in particle_list:
+            last = first + part._capacity
+            for tt, nn in cls.per_particle_vars:
+                getattr(merged, nn)[first:last] = getattr(part, nn)
+            first = last
+
+    merged.reorganize()
+    return merged
+
+
 def _pickle_to_float_buffer(payload):
     pickled = pickle.dumps(payload, protocol=2)
     bytes_arr = np.frombuffer(pickled, dtype="S1")
@@ -1114,11 +1137,17 @@ class Simulation:
         particle_list = []
         for piece in pieces:
             particles = piece.particles if isinstance(piece, SlicePiece) else piece
-            if len(particles.x) > 0:
-                particle_list.append(particles)
-        if not particle_list:
-            return _empty_particles_from_reference(self.machine.particle_ref)
-        return xp.Particles.merge(particle_list, _context=xo.ContextCpu())
+            particle_id = np.array(particles.particle_id, dtype=int, copy=False)
+            # Slice pieces are disjoint partitions of the same bunch, so their
+            # particle ids are already globally unique and must be preserved.
+            valid = particle_id >= 0
+            if np.any(valid):
+                particle_list.append(
+                    _filter_particles_or_empty(
+                        particles, valid, self.machine.particle_ref
+                    )
+                )
+        return _concat_particle_partitions(particle_list, self.machine.particle_ref)
 
 
 def get_sim_instance(
