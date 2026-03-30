@@ -127,7 +127,14 @@ class LHC:
         self.beta = float(self.particle_ref.beta0[0])
         self.gamma = float(self.particle_ref.gamma0[0])
         self.betagamma = self.beta * self.gamma
-        self.frequency_rf = pp.h_RF * self.beta * c / self.circumference
+        self.voltage_rf = np.atleast_1d(np.array(pp.V_RF, dtype=float))
+        self.frequency_rf = (
+            np.atleast_1d(np.array(pp.h_RF, dtype=float))
+            * self.beta
+            * c
+            / self.circumference
+        )
+        self.lag_rf = self._pyheadtail_phase_to_xsuite_lag_deg(pp.dphi_RF)
         self.requested_longitudinal_mode = pp.longitudinal_mode
         self.tracking_longitudinal_mode = self._normalize_longitudinal_mode(
             pp.longitudinal_mode
@@ -162,6 +169,13 @@ class LHC:
         if self.matching_line.tracker is None:
             self.matching_line.build_tracker(_context=self._context)
 
+        longitudinal_engine = None
+        if self.tracking_longitudinal_mode == "nonlinear":
+            # Keep the matching line linear for Twiss/closed-orbit purposes,
+            # but generate the longitudinal coordinates with the RF-bucket
+            # matcher once the RF phase convention has been translated.
+            longitudinal_engine = "pyheadtail"
+
         return xp.generate_matched_gaussian_bunch(
             line=self.matching_line,
             num_particles=n_macroparticles,
@@ -169,6 +183,7 @@ class LHC:
             nemitt_y=epsn_y,
             sigma_z=sigma_z,
             total_intensity_particles=intensity,
+            engine=longitudinal_engine,
             _context=self._context,
         )
 
@@ -272,9 +287,9 @@ class LHC:
                 {
                     "momentum_compaction_factor": pp.alpha,
                     "slippage_length": self.circumference,
-                    "voltage_rf": [pp.V_RF],
-                    "frequency_rf": [self.frequency_rf],
-                    "lag_rf": [pp.dphi_RF],
+                    "voltage_rf": list(self.voltage_rf),
+                    "frequency_rf": list(self.frequency_rf),
+                    "lag_rf": list(self.lag_rf),
                 }
             )
         elif mode != "frozen":
@@ -305,13 +320,19 @@ class LHC:
             longitudinal_mode=matching_mode,
             momentum_compaction_factor=pp.alpha,
             slippage_length=self.circumference,
-            voltage_rf=[pp.V_RF],
-            frequency_rf=[self.frequency_rf],
-            lag_rf=[pp.dphi_RF],
+            voltage_rf=list(self.voltage_rf),
+            frequency_rf=list(self.frequency_rf),
+            lag_rf=list(self.lag_rf),
         )
         line = xt.Line(elements=[matching_map], particle_ref=self.particle_ref.copy(_context=self._context))
         line.build_tracker(_context=self._context)
         return line
+
+    def _pyheadtail_phase_to_xsuite_lag_deg(self, dphi_rf):
+        phase_rad = np.atleast_1d(np.array(dphi_rf, dtype=float))
+        # PyHEADTAIL's dphi_RF=0 is synchronous above transition, while
+        # Xsuite's LineSegmentMap uses lag_rf=180 deg for the same bucket.
+        return np.mod(np.degrees(np.pi - phase_rad), 360.0)
 
     def _normalize_longitudinal_mode(self, mode):
         if mode is None:
