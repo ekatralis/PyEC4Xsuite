@@ -18,3 +18,6 @@ compare/*out*
 *_testfiles*
 *.pkl*
 *.egg-info/
+tests/*/*.h5
+tests/*/*.json
+tests/*/*.png
